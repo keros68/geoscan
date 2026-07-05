@@ -70,6 +70,22 @@ def test_gui_config_supplies_default_line_and_text_targets_without_override(tmp_
     assert config.target_text_file == "T06TXT.WT"
 
 
+def test_gui_config_passes_optional_area_settings(tmp_path):
+    state = GuiFormState(
+        project_root=tmp_path,
+        source_raster=tmp_path / "t01_0006.tif",
+        map_id="T01_0006",
+        output_parent=tmp_path / "out",
+        conversion_mode="none",
+        include_areas=True,
+    )
+
+    config = build_program_config_from_gui(state)
+
+    assert config.include_areas is True
+    assert config.target_area_file == "T06AREA.WP"
+
+
 def test_gui_builds_ai_vision_config_from_form_state(tmp_path):
     state = GuiFormState(
         project_root=tmp_path,
@@ -190,6 +206,35 @@ def test_gui_completion_summary_warns_when_run_only_prepared_batch():
     assert "prepare" in message
 
 
+def test_gui_completion_summary_mentions_optional_area_exchange():
+    kind, message = completion_message_for_report(
+        {
+            "output_root": "C:/maps/T01_0013_P",
+            "area_candidate_generation": {
+                "feature_count": 3,
+                "output_geojson": "C:/maps/T01_0013_P/05_AREA_WORKFLOW/T01_0013_review_area_candidates.geojson",
+            },
+            "area": {
+                "output_area_count": 3,
+                "shp_export": {
+                    "status": "written",
+                    "path": "C:/maps/T01_0013_P/07_AREA_SECTION_W60/grouped_exchange/T13AREA_WP/T13AREA_WP.shp",
+                },
+            },
+            "conversion": {
+                "mode": "none",
+                "status": "not_requested",
+                "ok": None,
+            },
+        }
+    )
+
+    assert kind == "ok"
+    assert "区候选: 3 个" in message
+    assert "区 Shapefile" in message
+    assert "T13AREA_WP.shp" in message
+
+
 def test_gui_completion_summary_warns_when_cli_conversion_failed():
     kind, message = completion_message_for_report(
         {
@@ -279,6 +324,7 @@ def test_gui_batch_config_reuses_form_options(tmp_path):
         ai_base_url="https://example.test/v1",
         ai_api_key="sk-test-secret",
         ai_model="qwen-vl-max",
+        include_areas=True,
     )
     rasters = (tmp_path / "t01_0001.tif", tmp_path / "t01_0002.tif")
 
@@ -291,6 +337,7 @@ def test_gui_batch_config_reuses_form_options(tmp_path):
     assert config.line_engine == "trace"
     assert config.conversion_mode == "none"
     assert config.ai_api_key == "sk-test-secret"
+    assert config.include_areas is True
     assert config.retry_incomplete is True
     assert config.limit == 5
 

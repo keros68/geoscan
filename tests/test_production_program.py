@@ -55,6 +55,14 @@ def _write_line_test_raster(path: Path) -> None:
     image.save(path, dpi=(300, 300))
 
 
+def _write_area_test_raster(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", (80, 60), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((10, 12, 40, 36), fill=(220, 30, 70))
+    image.save(path, dpi=(300, 300))
+
+
 def _write_sample_text_candidates(path: Path) -> None:
     payload = {
         "type": "FeatureCollection",
@@ -108,6 +116,14 @@ def test_default_line_target_file_uses_current_map_id():
     assert default_line_target_file("CUSTOM") == "LINE.WL"
 
 
+def test_default_area_target_file_uses_current_map_id():
+    from geoscan import production_program as pp
+
+    assert pp.default_area_target_file("T01_0006") == "T06AREA.WP"
+    assert pp.default_area_target_file("T01_0128") == "T28AREA.WP"
+    assert pp.default_area_target_file("CUSTOM") == "AREA.WP"
+
+
 def test_program_cli_safe_defaults():
     parser = build_arg_parser()
     args = parser.parse_args(
@@ -124,6 +140,7 @@ def test_program_cli_safe_defaults():
 
     assert args.ai_provider == "none"
     assert args.conversion_mode == "prepare"
+    assert args.include_areas is False
     assert args.computer_use_allowed is False
 
 
@@ -349,6 +366,132 @@ def test_program_auto_generates_line_candidates_and_line_dxf(tmp_path):
     assert Path(report["line"]["dxf_export"]["path"]).is_file()
     assert Path(report["line"]["dxf_export"]["path"]).stat().st_size > 0
     assert report["conversion"]["status"] == "not_requested"
+
+
+def test_program_does_not_generate_area_candidates_by_default(tmp_path, monkeypatch):
+    source_raster = tmp_path / "source" / "t01_0092.tif"
+    output_root = tmp_path / "T01_0092_P"
+    _write_area_test_raster(source_raster)
+
+    def fail_if_area_generation_runs(**_kwargs):
+        raise AssertionError("area generation should be opt-in")
+
+    monkeypatch.setattr(
+        "geoscan.production_program.generate_review_area_candidates",
+        fail_if_area_generation_runs,
+        raising=False,
+    )
+
+    report = run_production_program(
+        ProgramConfig(
+            project_root=tmp_path,
+            source_raster=source_raster,
+            map_id="T01_0092",
+            output_root=output_root,
+            conversion_mode="none",
+            export_dxf=False,
+            auto_generate_line_candidates=False,
+            auto_generate_text_candidates=False,
+        )
+    )
+
+    assert report["area_candidate_generation"] is None
+    assert report["area"] is None
+    assert not (output_root / "05_AREA_WORKFLOW").exists()
+
+
+def test_program_include_areas_writes_wp_candidate_exchange(tmp_path, monkeypatch):
+    source_raster = tmp_path / "source" / "t01_0091.tif"
+    output_root = tmp_path / "T01_0091_P"
+    _write_area_test_raster(source_raster)
+
+    def fake_export_shapefile(*, source_geojson, shp_path, ogr2ogr_path, gdal_data):
+        shp_path.parent.mkdir(parents=True, exist_ok=True)
+        shp_path.write_bytes(b"fake-shp")
+        shp_path.with_suffix(".dbf").write_bytes(b"fake-dbf")
+        shp_path.with_suffix(".shx").write_bytes(b"fake-shx")
+        shp_path.with_suffix(".prj").write_text("WGS84", encoding="utf-8")
+        return {"status": "written", "path": str(shp_path), "bytes": shp_path.stat().st_size}
+
+    monkeypatch.setattr(
+        "geoscan.production_accuracy_workflow._export_shapefile",
+        fake_export_shapefile,
+        raising=False,
+    )
+
+    report = run_production_program(
+        ProgramConfig(
+            project_root=tmp_path,
+            source_raster=source_raster,
+            map_id="T01_0091",
+            output_root=output_root,
+            conversion_mode="none",
+            include_areas=True,
+            auto_generate_line_candidates=False,
+            auto_generate_text_candidates=False,
+        )
+    )
+
+    area = report["area"]
+    assert report["area_candidate_generation"]["feature_count"] == 1
+    assert area["target_file"] == "T91AREA.WP"
+    assert area["optional"] is True
+    assert area["native_wp_ready_for_acceptance"] is False
+    assert area["output_area_count"] == 1
+    assert area["shp_export"]["status"] == "written"
+    assert Path(area["shp_export"]["path"]).is_file()
+    assert not Path(area["shp_export"]["path"]).with_suffix(".prj").exists()
+
+    package_geojson = Path(area["source_geojson"])
+    payload = json.loads(package_geojson.read_text(encoding="utf-8"))
+    props = payload["features"][0]["properties"]
+    assert props["CHECKED"] == "no"
+    assert props["TFILE"] == "T91AREA.WP"
+    assert "checked=yes" not in package_geojson.read_text(encoding="utf-8")
+
+
+def test_combined_exchange_package_includes_optional_wp_shapefile(tmp_path):
+    from geoscan.production_program import _build_combined_exchange_package
+
+    output_root = tmp_path / "T01_0001_P"
+    line_dxf = output_root / "06_LINE_SECTION_W60" / "grouped_exchange" / "T01LINE_WL.dxf"
+    line_dxf.parent.mkdir(parents=True)
+    line_dxf.write_bytes(b"dxf")
+    area_shp = output_root / "07_AREA_SECTION_W60" / "grouped_exchange" / "T01AREA_WP" / "T01AREA_WP.shp"
+    area_shp.parent.mkdir(parents=True)
+    area_shp.write_bytes(b"shp")
+    area_shp.with_suffix(".dbf").write_bytes(b"dbf")
+    area_shp.with_suffix(".shx").write_bytes(b"shx")
+
+    combined = _build_combined_exchange_package(
+        output_root=output_root,
+        exchange_reports=[
+            {
+                "target_file": "T01LINE.WL",
+                "source_geojson": str(tmp_path / "line.geojson"),
+                "output_line_count": 2,
+                "dxf_export": {"status": "written", "path": str(line_dxf)},
+            },
+            {
+                "target_file": "T01AREA.WP",
+                "source_geojson": str(tmp_path / "area.geojson"),
+                "output_area_count": 1,
+                "optional": True,
+                "shp_export": {"status": "written", "path": str(area_shp)},
+            },
+        ],
+    )
+
+    exchange_dir = Path(combined["source_dir"])
+    manifest = json.loads((exchange_dir / "manifest.json").read_text(encoding="utf-8"))
+    conversion_list = Path(combined["conversion_list"]).read_text(encoding="utf-8")
+
+    assert manifest["T01LINE.WL"]["kind"] == "dxf"
+    assert manifest["T01AREA.WP"]["kind"] == "shp"
+    assert (exchange_dir / "T01AREA_WP" / "T01AREA_WP.shp").is_file()
+    assert (exchange_dir / "T01AREA_WP" / "T01AREA_WP.dbf").is_file()
+    assert "T01LINE.WL\tdxf\tgrouped_exchange\\T01LINE_WL.dxf\t2" in conversion_list
+    assert "T01AREA.WP\tshp\tgrouped_exchange\\T01AREA_WP\\T01AREA_WP.shp\t1" in conversion_list
 
 
 def test_program_uses_supplied_text_candidates_without_auto_generation(tmp_path, monkeypatch):

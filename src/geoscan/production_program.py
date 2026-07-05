@@ -18,6 +18,7 @@ from geoscan.ai_vision_review import (
     AiVisionConfig,
     analyze_map_image_with_ai,
 )
+from geoscan.area_candidate_workflow import generate_review_area_candidates
 from geoscan.mapgis67_bridge import (
     prepare_batch,
     run_dxf_to_wl_wt_pipeline,
@@ -37,6 +38,7 @@ from geoscan.raster_level import (
 )
 from geoscan.production_accuracy_workflow import (
     short_output_root_for_map_id,
+    write_area_exchange_package,
     write_line_exchange_package,
     write_text_placeholder_exchange_package,
 )
@@ -86,6 +88,7 @@ class ProgramConfig:
     text_candidates: Path | None = None
     target_line_file: str | None = None
     target_text_file: str | None = None
+    target_area_file: str | None = None
     ai_provider: str = "none"
     ai_base_url: str = ""
     ai_api_key: str = ""
@@ -98,6 +101,7 @@ class ProgramConfig:
     export_dxf: bool = True
     auto_generate_line_candidates: bool = True
     auto_generate_text_candidates: bool = True
+    include_areas: bool = False
     reset_output: bool = False
     wait_timeout_seconds: int = 300
     ocr_python: Path | None = None
@@ -161,6 +165,14 @@ def default_line_target_file(map_id: str) -> str:
         return "LINE.WL"
     suffix = numbers[-1][-2:].zfill(2)
     return f"T{suffix}LINE.WL"
+
+
+def default_area_target_file(map_id: str) -> str:
+    numbers = re.findall(r"\d+", map_id)
+    if not numbers:
+        return "AREA.WP"
+    suffix = numbers[-1][-2:].zfill(2)
+    return f"T{suffix}AREA.WP"
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -511,11 +523,51 @@ def _write_mapgis_load_ready(
 
 
 def _exchange_feature_count(report: dict[str, Any]) -> int:
-    for key in ("output_line_count", "output_text_count", "output_feature_count"):
+    for key in ("output_line_count", "output_text_count", "output_area_count", "output_feature_count"):
         value = report.get(key)
         if value is not None:
             return int(value)
     return 0
+
+
+def _exchange_export_record(report: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    shp_export = report.get("shp_export")
+    if isinstance(shp_export, dict):
+        return "shp", shp_export
+    return "dxf", report.get("dxf_export") or {}
+
+
+def _exchange_status(report: dict[str, Any]) -> dict[str, Any]:
+    kind, export = _exchange_export_record(report)
+    return {
+        "target_file": report.get("target_file"),
+        "kind": kind,
+        "status": export.get("status"),
+        "path": export.get("path"),
+        "features": _exchange_feature_count(report),
+        "optional": bool(report.get("optional")),
+    }
+
+
+def _copy_exchange_file(
+    *,
+    source_path: Path,
+    exchange_dir: Path,
+    target_file: str,
+    kind: str,
+) -> Path:
+    if kind == "dxf":
+        dest = exchange_dir / f"{safe_target_stem(target_file)}.dxf"
+        if source_path.resolve() != dest.resolve():
+            shutil.copy2(source_path, dest)
+        return dest
+
+    dest_dir = exchange_dir / safe_target_stem(target_file)
+    if source_path.parent.resolve() != dest_dir.resolve():
+        if dest_dir.exists():
+            shutil.rmtree(dest_dir)
+        shutil.copytree(source_path.parent, dest_dir)
+    return dest_dir / source_path.name
 
 
 def _build_combined_exchange_package(
@@ -533,19 +585,25 @@ def _build_combined_exchange_package(
     conversion_lines: list[str] = []
     for report in exchange_reports:
         target_file = str(report["target_file"])
-        dxf_path = Path((report.get("dxf_export") or {})["path"])
-        dest = exchange_dir / f"{safe_target_stem(target_file)}.dxf"
-        if dxf_path.resolve() != dest.resolve():
-            shutil.copy2(dxf_path, dest)
+        kind, export = _exchange_export_record(report)
+        source_path = Path(str(export["path"]))
+        dest = _copy_exchange_file(
+            source_path=source_path,
+            exchange_dir=exchange_dir,
+            target_file=target_file,
+            kind=kind,
+        )
         count = _exchange_feature_count(report)
         manifest[target_file] = {
-            "kind": "dxf",
+            "kind": kind,
             "source": str(report.get("source_geojson")),
             "path": str(dest),
             "features": count,
+            "optional": bool(report.get("optional")),
         }
+        relative_path = str(dest.relative_to(output_root / "08_SECTION_W60")).replace("/", "\\")
         conversion_lines.append(
-            f"{target_file}\tdxf\tgrouped_exchange\\{dest.name}\t{count}"
+            f"{target_file}\t{kind}\t{relative_path}\t{count}"
         )
 
     _write_json(exchange_dir / "manifest.json", manifest)
@@ -557,6 +615,7 @@ def _build_combined_exchange_package(
         "ready_dir": str(ready_dir),
         "target_count": len(manifest),
         "targets": sorted(manifest),
+        "optional_targets": sorted(target for target, record in manifest.items() if record.get("optional")),
     }
     _write_json(output_root / "08_SECTION_W60" / "COMBINED_EXCHANGE_REPORT.json", report)
     return report
@@ -575,28 +634,25 @@ def _run_conversion_stage(
     if not packages:
         return {"mode": mode, "status": "no_exchange_package", "ok": None}
 
-    exchange_statuses = [
-        {
-            "target_file": report.get("target_file"),
-            "dxf_status": (report.get("dxf_export") or {}).get("status"),
-            "dxf_path": (report.get("dxf_export") or {}).get("path"),
-            "features": _exchange_feature_count(report),
-        }
-        for report in packages
-    ]
+    exchange_statuses = [_exchange_status(report) for report in packages]
     if mode == "none":
         return {"mode": mode, "status": "not_requested", "ok": None, "exchange_statuses": exchange_statuses}
 
     written_reports = [
-        report for report in packages if (report.get("dxf_export") or {}).get("status") == "written"
+        report for report in packages if _exchange_export_record(report)[1].get("status") == "written"
     ]
-    if not written_reports:
+    written_dxf_reports = [
+        report
+        for report in written_reports
+        if _exchange_export_record(report)[0] == "dxf"
+    ]
+    if not written_dxf_reports:
         return {
             "mode": mode,
             "status": "dxf_not_exported",
             "ok": False,
             "exchange_statuses": exchange_statuses,
-            "note": "At least one written DXF is required before preparing or running SECTION conversion.",
+            "note": "At least one written DXF is required before preparing or running SECTION conversion; optional SHP area packages cannot drive SECTION by themselves.",
         }
 
     combined = _build_combined_exchange_package(output_root=output_root, exchange_reports=written_reports)
@@ -715,10 +771,14 @@ Main reports:
         text += "- `05_TEXT_WORKFLOW/TEXT_CANDIDATE_GENERATION_REPORT.json`\n"
     if report.get("line_candidate_generation"):
         text += "- `04_LINE_WORKFLOW/LINE_CANDIDATE_GENERATION_REPORT.json`\n"
+    if report.get("area_candidate_generation"):
+        text += "- `05_AREA_WORKFLOW/AREA_CANDIDATE_GENERATION_REPORT.json`\n"
     if report.get("line"):
         text += "- `06_LINE_SECTION_W60/LINE_EXCHANGE_PACKAGE_REPORT.json`\n"
     if report.get("text"):
         text += "- `07_TEXT_SECTION_W60/TEXT_PLACEHOLDER_PACKAGE_REPORT.json`\n"
+    if report.get("area"):
+        text += "- `07_AREA_SECTION_W60/AREA_EXCHANGE_PACKAGE_REPORT.json`\n"
     if (report.get("conversion") or {}).get("combined_exchange"):
         text += "- `08_SECTION_W60/COMBINED_EXCHANGE_REPORT.json`\n"
     if (report.get("ai") or {}).get("visual_review"):
@@ -898,6 +958,17 @@ def run_production_program(
         )
         text_candidates_path = Path(str(text_candidate_generation["output_geojson"]))
 
+    _stop_check("area_candidates")
+    area_candidate_generation: dict[str, Any] | None = None
+    area_candidates_path: Path | None = None
+    if config.include_areas:
+        area_candidate_generation = generate_review_area_candidates(
+            source_raster=working_raster,
+            output_root=output_root,
+            map_id=config.map_id,
+        )
+        area_candidates_path = Path(str(area_candidate_generation["output_geojson"]))
+
     ai_enhance_report: dict[str, Any] | None = None
     if config.ai_enhance:
         from geoscan.ai_enhance import run_ai_enhance_stage
@@ -965,10 +1036,21 @@ def run_production_program(
             export_dxf=config.export_dxf,
         )
 
+    area_report: dict[str, Any] | None = None
+    if area_candidates_path is not None and _count_geojson_features(area_candidates_path) > 0:
+        target_file = config.target_area_file or default_area_target_file(config.map_id)
+        area_report = write_area_exchange_package(
+            source_geojson=area_candidates_path,
+            output_root=output_root,
+            map_id=config.map_id,
+            target_file=target_file,
+            export_shp=config.export_dxf,
+        )
+
     _stop_check("conversion")
     conversion_report = _run_conversion_stage(
         mode=config.conversion_mode,
-        exchange_reports=[line_report, text_report],
+        exchange_reports=[line_report, text_report, area_report],
         output_root=output_root,
         wait_timeout_seconds=config.wait_timeout_seconds,
     )
@@ -1019,6 +1101,8 @@ def run_production_program(
         "line": line_report,
         "text_candidate_generation": text_candidate_generation,
         "text": text_report,
+        "area_candidate_generation": area_candidate_generation,
+        "area": area_report,
         "conversion": conversion_report,
     }
     report["mapgis_load_ready"] = _write_mapgis_load_ready(
@@ -1050,6 +1134,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     run.add_argument("--text-candidates", type=Path)
     run.add_argument("--target-line-file")
     run.add_argument("--target-text-file")
+    run.add_argument("--target-area-file")
     run.add_argument("--ai-provider", default="none")
     run.add_argument("--ai-base-url", default="")
     run.add_argument("--ai-api-key", default="")
@@ -1085,6 +1170,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-export-dxf", action="store_true")
     run.add_argument("--no-auto-line-candidates", action="store_true")
     run.add_argument("--no-auto-text-candidates", action="store_true")
+    run.add_argument(
+        "--include-areas",
+        action="store_true",
+        help=(
+            "Optional: generate review-only WP area candidates from colored fills and export a "
+            "Shapefile exchange package. Results stay checked=no and require manual MapGIS review."
+        ),
+    )
     run.add_argument(
         "--line-repair",
         choices=sorted(VALID_LINE_REPAIR_MODES),
@@ -1145,6 +1238,7 @@ def main(argv: list[str] | None = None) -> None:
                     text_candidates=args.text_candidates,
                     target_line_file=args.target_line_file,
                     target_text_file=args.target_text_file,
+                    target_area_file=args.target_area_file,
                     ai_provider=args.ai_provider,
                     ai_base_url=args.ai_base_url,
                     ai_api_key=args.ai_api_key,
@@ -1158,6 +1252,7 @@ def main(argv: list[str] | None = None) -> None:
                     export_dxf=not args.no_export_dxf,
                     auto_generate_line_candidates=not args.no_auto_line_candidates,
                     auto_generate_text_candidates=not args.no_auto_text_candidates,
+                    include_areas=bool(args.include_areas),
                     reset_output=args.reset_output,
                     wait_timeout_seconds=args.wait_timeout_seconds,
                     level_input=args.level_input,

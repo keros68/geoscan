@@ -21,6 +21,7 @@ OGR2OGR_ENV_VAR = "MAPGIS_OGR2OGR"
 GDAL_DATA_ENV_VAR = "MAPGIS_GDAL_DATA"
 TEXT_PLACEHOLDER_ROUTE = "section_w60_text_dxf"
 LINE_EXCHANGE_ROUTE = "section_w60_line_dxf"
+AREA_EXCHANGE_ROUTE = "w60_area_shp_optional"
 
 
 def bundled_gdal_dir() -> Path | None:
@@ -267,6 +268,14 @@ def _write_conversion_list(path: Path, *, target_file: str, dxf_path: Path, outp
     path.write_text(f"{target_file}\tdxf\t{relative_text}\t{count}\n", encoding="utf-8")
 
 
+def _relative_exchange_text(path: Path, *, output_root: Path) -> str:
+    try:
+        relative = path.relative_to(output_root)
+    except ValueError:
+        relative = path
+    return str(relative).replace("/", "\\")
+
+
 def _line_coordinates(feature: dict[str, Any]) -> list[list[float]] | None:
     geometry = feature.get("geometry") or {}
     if geometry.get("type") != "LineString":
@@ -312,6 +321,39 @@ def _line_feature(
         "type": "Feature",
         "properties": output_props,
         "geometry": {"type": "LineString", "coordinates": coordinates},
+    }
+
+
+def _area_feature(
+    feature: dict[str, Any],
+    *,
+    index: int,
+    map_id: str,
+    target_file: str,
+) -> dict[str, Any] | None:
+    geometry = feature.get("geometry") or {}
+    if geometry.get("type") not in {"Polygon", "MultiPolygon"}:
+        return None
+    props = dict(feature.get("properties") or {})
+    candidate_id = _clean_text(props.get("candidate_id") or props.get("feature_id")) or f"{map_id}_AREA_{index:04d}"
+    layer = _clean_text(props.get("cad_layer") or props.get("Layer")) or f"{map_id}_AUTO_AREA"
+    output_props = {
+        "CID": candidate_id,
+        "LAYER": layer,
+        "TARGET": "WP",
+        "TFILE": target_file,
+        "FEATURE": _clean_text(props.get("feature") or props.get("Feature") or "area_candidate"),
+        "CHECKED": "no",
+        "REVIEW": "pending",
+        "CONF": round(float(props.get("confidence") or 0.0), 4),
+        "AREA_PX": round(float(props.get("area_px") or 0.0), 2),
+        "ROUTE": AREA_EXCHANGE_ROUTE,
+        "NOTE": "Optional area candidate; manual MapGIS review required.",
+    }
+    return {
+        "type": "Feature",
+        "properties": output_props,
+        "geometry": geometry,
     }
 
 
@@ -366,6 +408,63 @@ def _export_dxf(
         "path": str(dxf_path),
         "bytes": dxf_path.stat().st_size,
         "gdal_data_used": str(effective_gdal_data),
+    }
+
+
+def _remove_shapefile_prj(shp_path: Path) -> bool:
+    prj_path = shp_path.with_suffix(".prj")
+    if prj_path.exists():
+        prj_path.unlink()
+        return True
+    return False
+
+
+def _export_shapefile(
+    *,
+    source_geojson: Path,
+    shp_path: Path,
+    ogr2ogr_path: Path,
+    gdal_data: Path,
+) -> dict[str, Any]:
+    if not ogr2ogr_path.exists():
+        raise FileNotFoundError(f"Missing ogr2ogr: {ogr2ogr_path}")
+    if shp_path.parent.exists():
+        shutil.rmtree(shp_path.parent)
+    shp_path.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    if gdal_data.exists():
+        env["GDAL_DATA"] = str(ascii_safe_env_dir(gdal_data, purpose="GDAL_DATA"))
+    completed = subprocess.run(
+        [
+            str(ogr2ogr_path),
+            "-f",
+            "ESRI Shapefile",
+            str(shp_path),
+            str(source_geojson),
+            "-nln",
+            shp_path.stem,
+            "-overwrite",
+        ],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "Shapefile export failed\nSTDOUT:\n"
+            + completed.stdout
+            + "\nSTDERR:\n"
+            + completed.stderr
+        )
+    prj_removed = _remove_shapefile_prj(shp_path)
+    return {
+        "status": "written",
+        "path": str(shp_path),
+        "bytes": shp_path.stat().st_size,
+        "prj_removed": prj_removed,
     }
 
 
@@ -690,6 +789,95 @@ def write_line_exchange_package(
         "dxf_export": dxf_report,
     }
     _write_json(line_dir / "LINE_EXCHANGE_PACKAGE_REPORT.json", report)
+    return report
+
+
+def write_area_exchange_package(
+    *,
+    source_geojson: Path,
+    output_root: Path,
+    map_id: str,
+    target_file: str,
+    export_shp: bool = True,
+    ogr2ogr_path: Path | None = None,
+    gdal_data: Path | None = None,
+) -> dict[str, Any]:
+    ogr2ogr_path = resolve_ogr2ogr(ogr2ogr_path)
+    gdal_data = resolve_gdal_data(gdal_data)
+    output_root = Path(output_root)
+    source_geojson = Path(source_geojson)
+    area_dir = output_root / "07_AREA_SECTION_W60"
+    grouped_sources = area_dir / "grouped_sources"
+    grouped_exchange = area_dir / "grouped_exchange"
+    section_batch = area_dir / "section_batch"
+    ready_dir = output_root / "MAPGIS_READY"
+    target_stem = safe_target_stem(target_file)
+    output_source = grouped_sources / f"{target_stem}.geojson"
+    output_shp = grouped_exchange_path(grouped_exchange, target_file)
+    conversion_list = area_dir / "CONVERSION_LIST.txt"
+
+    payload = _read_json(source_geojson)
+    output_features: list[dict[str, Any]] = []
+    for index, feature in enumerate(payload.get("features", []), start=1):
+        output_feature = _area_feature(
+            feature,
+            index=index,
+            map_id=map_id,
+            target_file=target_file,
+        )
+        if output_feature is not None:
+            output_features.append(output_feature)
+
+    _write_json(output_source, {"type": "FeatureCollection", "name": target_stem, "features": output_features})
+    source_manifest = {
+        target_file: {
+            "kind": "shp",
+            "source": str(output_source),
+            "path": str(output_shp),
+            "features": len(output_features),
+            "optional": True,
+        }
+    }
+    _write_json(grouped_sources / "manifest.json", source_manifest)
+    _write_json(grouped_exchange / "manifest.json", source_manifest)
+    conversion_list.write_text(
+        f"{target_file}\tshp\t{_relative_exchange_text(output_shp, output_root=area_dir)}\t{len(output_features)}\n",
+        encoding="utf-8",
+    )
+
+    if export_shp and output_features:
+        shp_report = _export_shapefile(
+            source_geojson=output_source,
+            shp_path=output_shp,
+            ogr2ogr_path=ogr2ogr_path,
+            gdal_data=gdal_data,
+        )
+        shp_report["prj_removed"] = bool(shp_report.get("prj_removed")) or _remove_shapefile_prj(output_shp)
+    elif export_shp:
+        shp_report = {"status": "empty", "path": str(output_shp), "reason": "no_area_features"}
+    else:
+        shp_report = {"status": "skipped", "path": str(output_shp), "reason": "export_shp_false"}
+
+    report = {
+        "route": AREA_EXCHANGE_ROUTE,
+        "native_wp_ready_for_acceptance": False,
+        "optional": True,
+        "source_geojson_input": str(source_geojson),
+        "source_geojson": str(output_source),
+        "target_file": target_file,
+        "output_root": str(output_root),
+        "grouped_sources_manifest": str(grouped_sources / "manifest.json"),
+        "grouped_exchange_manifest": str(grouped_exchange / "manifest.json"),
+        "grouped_exchange_dir": str(grouped_exchange),
+        "section_batch_dir": str(section_batch),
+        "conversion_list": str(conversion_list),
+        "ready_dir": str(ready_dir),
+        "source_area_count": len(payload.get("features", [])),
+        "output_area_count": len(output_features),
+        "shp_export": shp_report,
+        "note": "Optional WP area exchange package; not accepted until MapGIS/W60 visual review passes.",
+    }
+    _write_json(area_dir / "AREA_EXCHANGE_PACKAGE_REPORT.json", report)
     return report
 
 
