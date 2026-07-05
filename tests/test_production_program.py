@@ -14,6 +14,31 @@ from geoscan.production_program import (
     run_production_program,
 )
 
+
+def _ogr2ogr_available() -> bool:
+    """True only when a real ogr2ogr + GDAL DXF template resolve on this machine.
+
+    DXF export shells out to ogr2ogr; without a local QGIS or a bundled ``gdal/``
+    it cannot run. CI runners have neither, so tests that need it skip instead of
+    failing. Local dev machines with QGIS still exercise the real export.
+    """
+    try:
+        from geoscan.production_accuracy_workflow import (
+            resolve_gdal_data,
+            resolve_ogr2ogr,
+        )
+
+        return resolve_ogr2ogr().exists() and (resolve_gdal_data() / "header.dxf").is_file()
+    except Exception:
+        return False
+
+
+needs_ogr2ogr = pytest.mark.skipif(
+    not _ogr2ogr_available(),
+    reason="ogr2ogr / GDAL DXF template not available (needs local QGIS or a bundled gdal/)",
+)
+
+
 def _write_test_raster(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     image = Image.new("RGB", (16, 10), "white")
@@ -300,6 +325,7 @@ def test_program_auto_generates_text_candidates_when_none_are_supplied(tmp_path,
     assert "05_TEXT_WORKFLOW" in report["text"]["source_geojson_input"]
 
 
+@needs_ogr2ogr
 def test_program_auto_generates_line_candidates_and_line_dxf(tmp_path):
     source_raster = tmp_path / "source" / "t01_0093.tif"
     output_root = tmp_path / "T01_0093_P"
