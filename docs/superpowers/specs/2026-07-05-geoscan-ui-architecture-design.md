@@ -1,7 +1,7 @@
 # GeoScan UI Architecture Redesign
 
 Date: 2026-07-05
-Status: design draft for review
+Status: design draft v2 for review
 Scope: UI architecture and migration plan only. No implementation is included in this document.
 
 ## Background
@@ -35,12 +35,83 @@ The previous packaging discussion treated `cc-switch` as a useful reference for 
 
 ## Recommendation
 
-Use a two-phase migration:
+Use two strategic steps, implemented as the staged plan later in this document:
 
 1. First, extract a stable Python application boundary from the existing Tkinter GUI.
 2. Then build a modern Tauri + React shell that talks to that Python boundary.
 
 This keeps risk controlled. The current GUI can continue to ship while the backend contract becomes stable. Once the contract is stable, a new shell can be built without changing the production pipeline.
+
+The product direction is a **GeoScan Control Console**: a task-focused desktop console for preparing, running, monitoring, and reviewing geologic-map vectorization jobs. It should borrow `cc-switch`'s modern shell clarity, but not its exact product shape. GeoScan's signature should come from its own domain: map processing stages, conversion readiness, and reviewable outputs.
+
+## Product Design Brief
+
+### Product
+
+GeoScan turns scanned geologic section maps into editable vector candidates. The app serves a non-technical or semi-technical user who wants to select a map image, run the workflow, and open a clean output package for MapGIS/QGIS review.
+
+### Primary job
+
+The first screen should help the user answer four questions quickly:
+
+1. What image am I running?
+2. Is this machine ready to run it?
+3. Which stage is running or failing?
+4. Where is the output I can review?
+
+### Reference direction
+
+Use `cc-switch` only as a reference for modern desktop-shell structure: clear navigation, compact settings, update awareness, and calm status feedback. Do not clone its domain model or imply GeoScan is a code-agent switcher.
+
+### Interactivity level
+
+The final UI should be fully interactive. During design/prototyping, fake job events are acceptable for layout validation, but implementation must connect to the real Python event contract before release.
+
+### Design risk worth taking
+
+Make the **stage rail** the product's memorable element. Instead of a generic progress bar, show the true GeoScan pipeline as a compact, inspectable sequence. This is distinctive because it comes from the product's actual workflow, not from decoration.
+
+## Visual and Interaction Direction
+
+GeoScan should read as a professional production tool, not a marketing page. The interface can be modern, but it should stay quiet, dense, and predictable.
+
+### Design principles
+
+- Use structure as meaning. Stage numbers, output folder names, and conversion states are real operational information, so they can drive the visual hierarchy.
+- Keep the surface restrained. Use color for primary actions, active navigation, stage status, warning, success, and error only.
+- Prefer inline recovery over modal interruption. A modal is acceptable for risky confirmation, but ordinary errors should explain the fix near the failing control or stage.
+- Do not hide advanced capability. Put uncommon options behind progressive disclosure rather than removing them.
+- Keep every candidate explicitly review-only. UI copy must never imply the app has confirmed geologic correctness.
+
+### Token direction
+
+These are design targets for the future shell, not mandatory values for Phase 1 Tkinter extraction:
+
+| Role | Token | Notes |
+| --- | --- | --- |
+| App background | `#F6F8FA` | Neutral, not cream/sand; keeps long tool sessions readable. |
+| Main surface | `#FFFFFF` | Content panels and form regions. |
+| Sidebar surface | `#EDF2F4` | Slightly cooler than the main surface to separate navigation. |
+| Primary ink | `#17202A` | Body text and headings. |
+| Muted ink | `#5D6B78` | Secondary labels; must still pass contrast. |
+| GeoScan green | `#2F6B4F` | Primary action and ready/success state. |
+| Section blue | `#2563A8` | Active stage, selected nav, link-style actions. |
+| Warning amber | `#B7791F` | Recoverable conversion or environment warnings. |
+| Danger red | `#B42318` | Failed stages and destructive rerun confirmations. |
+
+Typography should use a system UI stack first. Product UI does not need a decorative display face. Use a tight type scale, visible labels, and tabular numbers for counts, durations, stage indexes, candidate totals, and batch progress.
+
+### Motion direction
+
+Motion should convey state only:
+
+- 150-250 ms for hover, selected, expand/collapse, and status transitions.
+- Press feedback on buttons with a subtle scale target around `0.96`.
+- Stage changes may cross-fade or slide slightly within the rail.
+- Logs should append without jumping the whole page.
+- Respect reduced-motion settings.
+
+Do not use AIDA page structure, cinematic page-load choreography, GSAP scroll effects, large hero sections, decorative gradient orbs, or repeated card grids.
 
 ## Alternatives Considered
 
@@ -221,11 +292,22 @@ The application should feel like a focused production tool, not a landing page.
 
 Recommended first viewport:
 
-- left navigation with clear sections
-- primary workspace for the selected workflow
-- persistent status/log area
-- prominent run/stop/open-output actions
-- environment readiness shown near the action area
+```text
++--------------------------------------------------------------------------+
+| Top bar: GeoScan / current workspace / update state / settings shortcut  |
++-------------------+--------------------------------+---------------------+
+| Sidebar           | Main workspace                 | Run monitor         |
+|                   |                                |                     |
+| Single Run        | Source image                   | Environment check   |
+| Batch Run         | Map ID                         | Stage rail          |
+| Job History       | Output location                | Live log            |
+| Settings          | Beginner options               | Result summary      |
+| AI                | Expert options collapsed       | Recovery actions    |
+| Updates           | Run / Stop / Open output       |                     |
++-------------------+--------------------------------+---------------------+
+```
+
+The current Tkinter GUI can approximate this with tabs and grouped frames during the transition, but the Tauri shell should use the three-zone layout directly.
 
 Pages:
 
@@ -237,6 +319,295 @@ Pages:
 - Job History: local recent runs, output roots, status, report path, open-folder action.
 
 Advanced parameters should remain available but should not dominate the first screen.
+
+## Core Screens
+
+### Single Run
+
+This is the default screen.
+
+Primary content:
+
+- source image picker
+- derived Map ID with editable override
+- output parent and computed `<MAPID>_P` preview
+- beginner options: input leveling, enhanced preview, conversion mode
+- primary action: `Start run`
+- secondary actions: `Stop safely`, `Open output`, `Reveal report`
+
+Right-side monitor:
+
+- environment readiness
+- stage rail
+- live log
+- result summary
+- inline recovery actions
+
+Empty state:
+
+- show one clear action: choose an input image
+- explain that Map ID and output folder will be filled automatically
+- do not show the full advanced form before an image is chosen
+
+### Batch Run
+
+Batch is not just Single Run repeated. It needs table-first monitoring.
+
+Primary content:
+
+- source folder picker
+- discovered raster count
+- optional limit
+- retry incomplete toggle
+- batch run/stop controls
+
+Table columns:
+
+- Map ID
+- status
+- line candidates
+- text candidates
+- conversion status
+- output folder
+- error summary
+
+The table should use tabular numbers and preserve row height while updates stream in.
+
+### Job History
+
+Job history should help the user return to outputs without remembering folders.
+
+Initial implementation should derive history from known output reports rather than create a new database. A local index can be added later only if report scanning becomes slow.
+
+Rows should include:
+
+- map ID
+- last run time
+- output root
+- completion state
+- line/text/area candidate counts
+- conversion result
+- report path
+- open-folder action
+
+### Settings
+
+Settings should be organized by operational dependency:
+
+- MapGIS conversion: SECTION, W60, dongle status
+- DXF/GDAL: ogr2ogr, GDAL data
+- OCR: embedded OCR state, optional external OCR interpreter
+- local app data: config path, key-storage state
+- update channel: current version, runtime version, release check
+
+`Auto-detect tools` should be a prominent action with a visible result summary.
+
+### AI
+
+AI remains optional and review-only.
+
+Controls:
+
+- provider
+- base URL
+- model
+- API key
+- save encrypted key toggle
+- test connection
+- run visual review
+
+The key field should always show whether the key is session-only or encrypted locally. Logs and events must show only redacted keys.
+
+### Updates
+
+Updates should explain the chosen route:
+
+- no update
+- lightweight engine update
+- full installer required
+- network failure
+- checksum failure
+
+The user should know whether the update preserves local settings before applying it.
+
+## Stage Rail
+
+The stage rail is the main signature component.
+
+Stages:
+
+| Stage | Label | Source of truth |
+| --- | --- | --- |
+| `00_INPUT_FREEZE` | Input freeze | frozen pixel-unit TIFF and source hash |
+| `04_LINE_WORKFLOW` | Line candidates | line GeoJSON and candidate count |
+| `05_TEXT_WORKFLOW` | Text candidates | OCR/fallback GeoJSON and text count |
+| `DXF_EXPORT` | Exchange files | line/text/area DXF or Shapefile status |
+| `08_SECTION_W60` | MapGIS conversion | SECTION/W60 pipeline status |
+| `MAPGIS_LOAD_READY` | Load-ready package | final deliverable folder |
+
+Stage states:
+
+- `pending`
+- `running`
+- `completed`
+- `warning`
+- `failed`
+- `skipped`
+- `blocked`
+- `cancelled`
+
+Each stage should expose:
+
+- short status label
+- details panel
+- key output paths
+- counts when available
+- recovery action when there is one
+
+Examples:
+
+- If conversion mode is `prepare`, the MapGIS conversion stage is `skipped`, not failed.
+- If SECTION fails after DXF export, `DXF_EXPORT` can be `completed` while `08_SECTION_W60` is `failed`.
+- If the user stops safely mid-run, incomplete downstream stages are `cancelled` or `blocked`, and the output is not presented as load-ready.
+
+## Preflight Gate
+
+Preflight should happen before expensive work starts.
+
+Checks:
+
+| Check | Blocks run? | UI behavior |
+| --- | --- | --- |
+| input image exists | yes | field error near source picker |
+| output parent writable | yes | field error with choose-folder action |
+| Map ID valid | yes | inline correction |
+| SECTION found for `cli` | yes by default | link to Settings and auto-detect |
+| W60 found for `cli` | yes by default | link to Settings and auto-detect |
+| ogr2ogr available when DXF export is enabled | yes | link to Settings and auto-detect |
+| dongle process running for `cli` | warning with confirmation | offer retry, switch to `prepare`, or continue with risk |
+| OCR engine available | warning | explain fallback or external OCR setting |
+| AI provider complete when AI action is requested | yes for AI action only | field errors in AI page |
+
+Preflight should produce one compact readiness summary:
+
+```text
+Ready to run
+Needs attention
+Blocked
+```
+
+The run button should make the reason visible when disabled.
+
+## Beginner and Expert Modes
+
+The default mode should be beginner-friendly.
+
+Beginner mode shows:
+
+- choose input image
+- Map ID
+- output folder
+- input leveling
+- enhanced preview
+- conversion mode
+- start/stop/open output
+- readiness and stage rail
+
+Expert mode adds:
+
+- target WL/WT/WP names
+- line engine
+- line repair
+- export source
+- text candidate override
+- OCR interpreter
+- timeout
+- include areas
+- reset/fresh rerun
+- AI enhancement and visual review controls
+
+The mode should not create two separate behavior paths. It is only progressive disclosure over the same request model.
+
+## Interaction States
+
+Every screen should define these states before implementation:
+
+### Single Run states
+
+- no source selected
+- ready
+- ready with warnings
+- blocked by validation
+- running
+- stop requested
+- completed with load-ready package
+- completed without WT/WL because conversion was skipped
+- incomplete because conversion failed
+- failed before output package
+- cancelled safely
+
+### Batch states
+
+- no source folder selected
+- no rasters found
+- ready
+- running
+- stop requested after current map
+- completed
+- completed with failures
+- cancelled before queue finished
+
+### Update states
+
+- idle
+- checking
+- update available as engine package
+- update available as installer
+- downloading
+- verifying checksum
+- applying
+- restart required
+- failed with retry
+
+### Settings states
+
+- never configured
+- auto-detect running
+- detected and unsaved
+- saved
+- saved but tool path missing
+- non-ASCII path warning when relevant
+
+## Error and Recovery Matrix
+
+Errors should point to a next action.
+
+| Situation | Message intent | Recovery action |
+| --- | --- | --- |
+| output folder already exists | explain fresh rerun vs new output | enable fresh rerun or choose new parent |
+| missing SECTION/W60 | explain conversion cannot make WT/WL | open Settings, auto-detect, or switch to `prepare` |
+| dongle not running | explain `cli` likely fails late | retry detection, switch to `prepare`, or continue with explicit risk |
+| ogr2ogr missing | explain DXF export cannot complete | auto-detect or set path |
+| AI connection fails | show endpoint/model context without key | edit AI settings or retry |
+| user stops run | explain incomplete output cannot be used as final | fresh-rerun same map later |
+| conversion fails after DXF | distinguish usable DXF from missing WT/WL | open output folder, inspect logs, rerun conversion |
+
+The UI should never flatten these into a generic "run failed" state.
+
+## Component Quality Rules
+
+These rules apply to the future React/Tauri UI and to any interim UI polish:
+
+- interactive hit areas at least 40 x 40 px
+- visible focus indicators
+- hover, active, disabled, loading, warning, error, and success states for shared controls
+- tabular numbers for candidate counts, stage indexes, durations, file sizes, and batch totals
+- no text-only icon buttons unless they have accessible labels/tooltips
+- no layout shift when logs or batch rows update
+- no `transition: all`; specify exact animated properties
+- do not rely on color alone for stage status; include label/icon/text
+- advanced panels must preserve user-entered values when collapsed
+- long paths should wrap or middle-truncate with tooltip/copy action
 
 ## Data Flow
 
@@ -287,6 +658,8 @@ Phase 1 tests should focus on the extracted Python boundary:
 - form state to `BatchConfig`
 - form state to `AiVisionConfig`
 - validation errors for common bad inputs
+- preflight readiness summaries
+- stage event mapping from production reports
 - completion message generation
 - event serialization contains no secrets
 - cancellation produces an incomplete warning
@@ -298,6 +671,8 @@ For the future Tauri shell:
 
 - unit-test request building in React
 - integration-test Tauri command invocation with a fake JSONL engine
+- UI tests for no-source, blocked, running, warning, failed, completed, and cancelled states
+- accessibility checks for focus order, labels, and keyboard operation
 - smoke-test packaged app launch
 - verify real engine commands on Windows before release
 
@@ -325,29 +700,50 @@ Expected changes:
 - Add command entry points for single run, batch run, AI test, AI analysis, and update check.
 - Serialize events to stdout.
 - Accept request JSON files rather than long command-line flag lists for UI-driven runs.
+- Emit preflight events, stage-rail events, warning events, result events, and recovery-action hints.
+- Keep event names stable and documented so both Tkinter and Tauri can consume them.
 
 Verification:
 
 - unit tests for request parsing and event output
+- stage mapping tests for `prepare`, `none`, successful `cli`, failed `cli`, cancellation, and skipped conversion
 - local dry-run with a synthetic request
 - secret redaction tests
 
-### Phase 3: Build the Tauri + React shell
+### Phase 3: Prototype the control console shell
+
+Expected changes:
+
+- Build a local React/Tauri prototype around a fake JSONL engine.
+- Implement the three-zone layout: navigation, main workspace, run monitor.
+- Implement the stage rail, preflight summary, beginner/expert disclosure, and key empty/error states.
+- Keep the prototype visually restrained and tool-like; do not add marketing hero sections or decorative motion.
+
+Verification:
+
+- fake-engine UI tests
+- screenshot checks at desktop and smaller widths
+- keyboard navigation through primary controls
+- state coverage for no source, blocked, running, failed, warning, completed, and cancelled
+
+### Phase 4: Connect the Tauri + React shell to the real engine
 
 Expected changes:
 
 - Add `ui/` with Tauri and React.
-- Implement pages around the JSONL engine contract.
+- Replace fake events with the real JSONL engine command.
+- Implement pages around the JSONL engine contract: Single Run, Batch Run, Job History, Settings, AI, Updates.
 - Keep Tkinter GUI available until the new shell passes acceptance.
 
 Verification:
 
 - frontend build
 - Tauri dev launch
-- fake-engine UI tests
+- fake-engine and real-engine UI tests
+- real single-map dry run where safe
 - Windows packaged smoke test
 
-### Phase 4: Packaging integration
+### Phase 5: Packaging integration
 
 Expected changes:
 
@@ -369,6 +765,11 @@ The design is successfully implemented only when:
 - `production_gui.py` is a thin shell rather than the owner of business behavior.
 - Single-run, batch-run, AI, settings, and update flows can be exercised through a shared application boundary.
 - The event protocol is documented and covered by tests.
+- The stage rail accurately represents skipped, failed, completed, blocked, and cancelled workflow stages.
+- Preflight prevents avoidable expensive failures and gives the user clear recovery actions.
+- Beginner mode can complete a normal single-map run without exposing expert-only controls.
+- Expert mode still exposes the advanced controls available in the current GUI.
+- Batch rows update without layout shift and retain useful counts/statuses.
 - No plaintext API keys appear in logs, events, settings, reports, or test snapshots.
 - Existing Tkinter GUI behavior remains usable during the migration.
 - The future Tauri shell can run the Python engine without importing private modules or rewriting core algorithms.
@@ -382,11 +783,17 @@ The design is successfully implemented only when:
    - Recommendation: keep it for one release as a fallback, then remove if the new shell is stable.
 3. Whether job history should be derived from existing output reports or stored in a new local index.
    - Recommendation: derive from output reports first; add a local index only if performance or discoverability becomes a real issue.
+4. Whether the right-side run monitor should be permanently visible or collapsible on small screens.
+   - Recommendation: keep it visible on desktop, collapse it behind a status drawer only on constrained widths.
+5. Whether the stage rail should show area/WP work as a permanent stage.
+   - Recommendation: keep area output inside the exchange-files stage until area processing becomes a default path.
 
 ## Implementation Guardrails
 
 - Make surgical changes in Phase 1; do not redesign the visual layout while extracting the boundary.
 - Preserve current user-facing Chinese messages unless the extraction requires clearer shared wording.
+- Do not start the Tauri implementation until the stage event contract is stable enough to drive a fake-engine prototype.
+- Keep visual design restrained: no AIDA page structure, no cinematic hero, no decorative GSAP scroll scenes, no generic card wall.
 - Do not change versioning, installer naming, updater asset names, or runtime version semantics during Phase 1.
 - Do not move private MapGIS writer logic into public modules.
 - Do not treat passing tests as proof of vectorization quality; manual MapGIS acceptance remains separate.
