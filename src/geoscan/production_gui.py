@@ -458,6 +458,10 @@ class ProductionGui(tk.Tk):
         self.after(200, self._drain_messages)
         self.after(300, self._drain_batch_rows)
         self.after(400, self._warn_non_ascii_install_path)
+        # Auto-check for updates shortly after startup (silent unless a newer
+        # version exists). Frozen/installed app only — dev runs skip it.
+        if getattr(sys, "frozen", False):
+            self.after(3000, lambda: self._check_for_update(silent=True))
 
     def _setup_style(self) -> None:
         try:
@@ -863,35 +867,44 @@ class ProductionGui(tk.Tk):
     # ------------------------------------------------------------------
     # Auto-update (GitHub Releases)
     # ------------------------------------------------------------------
-    def _check_for_update(self) -> None:
-        """Check GitHub Releases for a newer version, then offer to install it."""
+    def _check_for_update(self, silent: bool = False) -> None:
+        """Check GitHub Releases for a newer version, then offer to install it.
+
+        ``silent`` (the automatic check on startup) suppresses the "already up to
+        date" and network-error popups — it only speaks up when an update is
+        actually available, so it never nags a user who is current or offline.
+        """
         button = getattr(self, "_update_button", None)
-        if button is not None:
+        if button is not None and not silent:
             button.configure(state="disabled")
-        self.status_var.set("正在检查更新…")
+        if not silent:
+            self.status_var.set("正在检查更新…")
 
         def worker() -> None:
             from geoscan import updater
 
             try:
                 info = updater.check_for_update()
-                self.after(0, lambda: self._on_update_checked(info, None))
+                self.after(0, lambda: self._on_update_checked(info, None, silent))
             except updater.UpdateError as exc:
-                self.after(0, lambda: self._on_update_checked(None, str(exc)))
+                self.after(0, lambda: self._on_update_checked(None, str(exc), silent))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_update_checked(self, info, error: str | None) -> None:
+    def _on_update_checked(self, info, error: str | None, silent: bool = False) -> None:
         button = getattr(self, "_update_button", None)
         if button is not None:
             button.configure(state="normal")
-        self.status_var.set("")
+        if not silent:
+            self.status_var.set("")
 
         if error is not None:
-            messagebox.showwarning("检查更新", error)
+            if not silent:
+                messagebox.showwarning("检查更新", error)
             return
         if not info.update_available:
-            messagebox.showinfo("检查更新", f"已是最新版本（v{info.current}）。")
+            if not silent:
+                messagebox.showinfo("检查更新", f"已是最新版本（v{info.current}）。")
             return
 
         notes = info.notes.strip()
