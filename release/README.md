@@ -35,31 +35,42 @@ ISCC release\installer\installer.iss     # 产出 dist\installer\MapGISVectorize
 用户配置写在 `%LOCALAPPDATA%\MapGISVectorize\config\`，**升级/卸载都不动它**。
 这正是就地自动升级安全的原因：升级器重跑安装包，用户的工具路径 + API Key 都保留。
 
+## 两层更新模型
+
+程序装成两层：**运行时层**（冻结的 cv2/onnx/numpy/rapidocr，~100MB，极少变）+
+**引擎层**（松散的 `geoscan` 代码，在 `_internal/engine/`，~180KB，每版都变）。
+所以代码更新只发一个 `engine-<版本>-rt<N>.zip`（~180KB），客户端覆盖松散文件夹即可；
+只有运行时变了（换 numpy/cv2 大版本）才回退整包安装器。
+
+- 客户端怎么知道自己的运行时版本：读 `_internal/runtime_version.txt`（内容如 `1`）。
+- 引擎包命名 `engine-<引擎版本>-rt<运行时版本>.zip`，客户端只接受 `rt` 号与本机一致的引擎包。
+- **换了重型依赖时**：把 `packaging/runtime_version.txt` 的数字 +1，那一版起客户端会走整包安装器。
+
 ## 发布一个新版本（GitHub Releases）
 
-自动升级依赖「发布版本 = 一个带安装包资产的 GitHub Release」。发布步骤：
-
 ```powershell
-# 0. 先把 src/geoscan/__init__.py 的 __version__ 和 installer.iss 的 AppVersion
-#    一起 bump 到新版本号（例如 0.2.0），提交并推送。
+# 0. bump 版本号（三处必须一致）：src/geoscan/__init__.py 的 __version__、
+#    installer.iss 的 AppVersion、以及下面的 Release tag v<版本>。提交并推送。
 
-# 1. 干净构建 + 出安装包（见上）
-release\build_clean.ps1
-ISCC release\installer\installer.iss
+# 1. 构建冻结程序（当前环境直接打包；-Recreate 走干净 venv 减体积）
+python -m PyInstaller packaging\GeoScan.spec --noconfirm     # 或 release\build_clean.ps1
 
-# 2. 打 tag 并发布，把安装包作为 Release 资产上传
-#    tag 名用 v<版本>，客户端会 strip 掉前导 v 再和 __version__ 比对。
+# 2. 构建两个资产
+python release\build_engine_zip.py             # -> dist\engine-<版本>-rt<N>.zip（轻量）
+ISCC release\installer\installer.iss           # -> dist\installer\GeoScanSetup.exe（整包）
+
+# 3. 发布，同时上传两个资产
 gh release create v0.2.0 `
-  dist\installer\MapGISVectorizeSetup.exe `
-  --title "GeoScan v0.2.0" `
-  --notes "本次更新内容：..."
+  dist\installer\GeoScanSetup.exe `
+  dist\engine-0.2.0-rt1.zip `
+  --title "GeoScan v0.2.0" --notes "本次更新内容：..."
 ```
 
-发布后，任何已安装的旧版点「检查更新」就会看到 v0.2.0、下载安装包、就地升级。
+发布后：已在两层版（≥0.1.3）上的用户点「检查更新」→ 只下 ~180KB 引擎包 → 自动重启生效；
+运行时号变了或还在旧单层版的用户 → 回退整包 `GeoScanSetup.exe`。
 
-> **版本号三处必须一致**：`src/geoscan/__init__.py` 的 `__version__`、
-> `installer.iss` 的 `AppVersion`、GitHub Release 的 tag（`v<版本>`）。
-> 客户端比较的是 Release tag 对 `__version__`；对不上就不会提示更新。
+> **版本号三处必须一致**：`__version__`、`installer.iss` AppVersion、Release tag `v<版本>`。
+> 客户端比较 Release tag 对本机 `__version__`；对不上就不会提示更新。
 
 ## 安全边界（不可破坏）
 
