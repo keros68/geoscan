@@ -127,7 +127,7 @@ exe = EXE(
     debug=False,
     strip=False,
     upx=False,
-    console=True,  # keep a console so operators can see batch/errors; GUI still opens
+    console=False,  # windowed app: no cmd window on launch (GUI has its own log pane)
     icon=str(repo_root / "packaging" / "app_icon.ico"),
 )
 

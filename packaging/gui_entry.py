@@ -8,10 +8,25 @@ as ``python -m geoscan.batch_runner run``)
 
 from __future__ import annotations
 
+import os
 import sys
 
 
+def _silence_missing_std_streams() -> None:
+    """Route stdout/stderr to null when they are absent.
+
+    A windowed (console=False) PyInstaller build has ``sys.stdout``/``stderr``
+    set to None, so any ``print()`` (in --check/--help/--batch or a library)
+    would raise. Send them to the null device instead. GUI users read the
+    on-screen log pane; there is no console to show anyway.
+    """
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name, None) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8", errors="replace"))
+
+
 def main() -> int:
+    _silence_missing_std_streams()
     argv = sys.argv[1:]
     if argv and argv[0] in {"--help", "-h"}:
         print(

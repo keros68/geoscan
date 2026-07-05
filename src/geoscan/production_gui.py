@@ -526,34 +526,39 @@ class ProductionGui(tk.Tk):
         self._path_row(root, 5, "输出到", self.output_parent_var, self._choose_output_parent)
         self._readonly_row(root, 6, "结果将保存在", self.output_preview_var)
 
+        # Two option rows in a grid: each label + combo + a hint in a stretchable
+        # column, so the long Chinese hints never get clipped at the right edge.
         options_row = ttk.Frame(root)
-        options_row.grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        ttk.Label(options_row, text="输入调平").pack(side=tk.LEFT)
+        options_row.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        options_row.columnconfigure(2, weight=1)
+
+        ttk.Label(options_row, text="输入调平").grid(row=0, column=0, sticky="w", pady=2)
         ttk.Combobox(
             options_row,
             textvariable=self.level_input_var,
             values=("off", "auto", "force"),
             state="readonly",
             width=8,
-        ).pack(side=tk.LEFT, padx=(4, 4))
+        ).grid(row=0, column=1, sticky="w", padx=(6, 10), pady=2)
         ttk.Label(
             options_row,
-            text="（默认 off=不调平，已处理好的图直接用；原始扫描图想纠偏转 TIFF 才选 auto/force）",
+            text="默认 off=不调平，已处理好的图直接用；原始扫描图想纠偏转 TIFF 才选 auto/force",
             style="Hint.TLabel",
-        ).pack(side=tk.LEFT, padx=(0, 18))
-        ttk.Label(options_row, text="增强底图（人工看图）").pack(side=tk.LEFT)
+        ).grid(row=0, column=2, sticky="w", pady=2)
+
+        ttk.Label(options_row, text="增强底图（人工看图）").grid(row=1, column=0, sticky="w", pady=2)
         ttk.Combobox(
             options_row,
             textvariable=self.enhanced_preview_var,
             values=("none", "light", "standard", "strong"),
             state="readonly",
             width=10,
-        ).pack(side=tk.LEFT, padx=(4, 4))
+        ).grid(row=1, column=1, sticky="w", padx=(6, 10), pady=2)
         ttk.Label(
             options_row,
-            text="（额外生成锐化底图，几何与矢量对齐，装它修图更清楚；none=不生成）",
+            text="额外生成锐化底图，几何与矢量对齐，装它修图更清楚；none=不生成",
             style="Hint.TLabel",
-        ).pack(side=tk.LEFT)
+        ).grid(row=1, column=2, sticky="w", pady=2)
 
         self.notebook = ttk.Notebook(root)
         self.notebook.grid(row=8, column=0, columnspan=3, sticky="nsew", pady=(10, 8))
