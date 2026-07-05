@@ -11,7 +11,7 @@
 
 #define AppName "GeoScan"
 ; Keep this in step with src/geoscan/__init__.py __version__ and the release tag.
-#define AppVersion "0.1.7"
+#define AppVersion "0.1.8"
 #define AppExe "GeoScan.exe"
 ; dist folder relative to this .iss (release\installer\ -> repo\dist\...)
 #define DistDir "..\..\dist\GeoScan"

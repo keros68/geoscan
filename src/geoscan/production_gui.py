@@ -928,9 +928,14 @@ class ProductionGui(tk.Tk):
                 messagebox.showinfo("检查更新", f"已是最新版本（v{info.current}）。")
             return
 
-        notes = info.notes.strip()
-        if len(notes) > 800:
-            notes = notes[:800] + "…"
+        # Keep the popup short — version + a one-line summary + size. Full notes
+        # live on the release page.
+        summary = ""
+        for line in info.notes.splitlines():
+            line = line.strip()
+            if line:
+                summary = line if len(line) <= 60 else line[:60] + "…"
+                break
         size = info.download_size
         if size >= 1024 * 1024:
             size_text = f"{size / (1024 * 1024):.1f} MB"
@@ -939,20 +944,13 @@ class ProductionGui(tk.Tk):
         else:
             size_text = "未知大小"
 
+        head = f"发现新版本 v{info.latest}（当前 v{info.current}）"
+        if summary:
+            head += f"\n{summary}"
         if info.kind == "engine":
-            prompt = (
-                f"发现新版本：v{info.latest}（当前 v{info.current}）。\n"
-                f"这是轻量更新，只需下载约 {size_text}（仅程序代码，不含运行库）。\n\n"
-                f"{notes}\n\n"
-                "现在更新？完成后程序会自动重启，你的设置不会丢失。"
-            )
+            prompt = f"{head}\n\n轻量更新约 {size_text}，装好自动重启，设置不丢。现在更新？"
         else:
-            prompt = (
-                f"发现新版本：v{info.latest}（当前 v{info.current}）。\n"
-                f"完整安装包约 {size_text}。\n\n"
-                f"{notes}\n\n"
-                "现在下载并安装？安装时本程序会关闭，你的本机设置不会丢失。"
-            )
+            prompt = f"{head}\n\n完整安装包约 {size_text}，安装时程序会关闭，设置不丢。现在下载安装？"
         if not messagebox.askyesno("发现新版本", prompt):
             return
         self._download_and_install_update(info)
