@@ -46,18 +46,35 @@ ISCC release\installer\installer.iss     # 产出 dist\installer\MapGISVectorize
 - 引擎包命名 `engine-<引擎版本>-rt<运行时版本>.zip`，客户端只接受 `rt` 号与本机一致的引擎包。
 - **换了重型依赖时**：把 `packaging/runtime_version.txt` 的数字 +1，那一版起客户端会走整包安装器。
 
+## 内置 GDAL（离线 DXF 导出）
+
+DXF 导出要 `ogr2ogr`。为让**没装 QGIS** 的机器也能导出，程序在自己文件夹里带一个
+`gdal/`（`ogr2ogr.exe` + 其 DLL 依赖闭包 + `gdal-data`，约 120MB；不含 800MB 的 PROJ
+网格，像素单位导出用不上）。`bundled_gdal_dir()` 会在 `<exe>/gdal/ogr2ogr.exe` 找到它。
+
+`packaging/gdal_bundle/` 是 git-ignored 的第三方二进制，需要时从一份 QGIS 现装重建：
+
+```powershell
+python release\build_gdal_bundle.py "D:\Qgis"   # 用 objdump 算 ogr2ogr 的 DLL 闭包
+```
+
+GDAL 属于**运行时层**（稳定）。加/换 GDAL 时把 `packaging/runtime_version.txt` +1，
+让老用户走整包安装器拿到它。
+
 ## 发布一个新版本（GitHub Releases）
 
 ```powershell
 # 0. bump 版本号（三处必须一致）：src/geoscan/__init__.py 的 __version__、
 #    installer.iss 的 AppVersion、以及下面的 Release tag v<版本>。提交并推送。
+#    （若换了运行时依赖，另把 packaging/runtime_version.txt +1）
 
-# 1. 构建冻结程序（当前环境直接打包；-Recreate 走干净 venv 减体积）
-python -m PyInstaller packaging\GeoScan.spec --noconfirm     # 或 release\build_clean.ps1
+# 1. 构建冻结程序，并把 GDAL 包复制到 dist\GeoScan\gdal（顶层，与 exe 同级）
+python -m PyInstaller packaging\GeoScan.spec --noconfirm     # 或 release\build_clean.ps1（会自动复制 gdal）
+Copy-Item -Recurse packaging\gdal_bundle dist\GeoScan\gdal   # 直接 PyInstaller 时手动复制
 
 # 2. 构建两个资产
 python release\build_engine_zip.py             # -> dist\engine-<版本>-rt<N>.zip（轻量）
-ISCC release\installer\installer.iss           # -> dist\installer\GeoScanSetup.exe（整包）
+ISCC release\installer\installer.iss           # -> dist\installer\GeoScanSetup.exe（整包，含 gdal）
 
 # 3. 发布，同时上传两个资产
 gh release create v0.2.0 `
