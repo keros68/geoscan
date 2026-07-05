@@ -3,11 +3,37 @@
 #   pyinstaller packaging/GeoScan.spec --noconfirm
 # Output: dist/GeoScan/ (one-folder; copy the whole folder).
 
+import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
-repo_root = Path(SPECPATH).resolve().parent.parent
+# SPECPATH is this spec's own directory (…/geoscan/packaging), so the repo root
+# is one level up. (Was .parent.parent under the old, more deeply-nested layout.)
+repo_root = Path(SPECPATH).resolve().parent
+
+# The package lives under src/ (src-layout). Put it on sys.path so both
+# collect_submodules below and PyInstaller's analysis can import `geoscan`.
+sys.path.insert(0, str(repo_root / "src"))
+
+# Private, local-only module tier (git-ignored, never published). The public
+# mainline does not import these, so they are NOT bundled — this keeps the
+# shipped installer, which becomes a public GitHub release asset, free of any
+# private code. Keep in step with .git/info/exclude.
+PRIVATE_MODULES = {
+    "native_direct", "wl_from_scratch", "wt_w60_derived", "wt_from_seed",
+    "mapgis_binary", "mapgis_wl", "mapgis_wt", "mapgis_wp", "native_format_lab",
+    "wt_native_diagnostics", "mapgis67_diagnostics",
+}
+
+
+def _is_public(module_name):
+    leaf = module_name.split(".")[-1]
+    return leaf not in PRIVATE_MODULES and "seed_templates" not in module_name
 
 # Bundle the OCR engine (rapidocr ships its .onnx models inside the wheel, so
 # colleague machines need no Python, no conda env and no internet). The
@@ -35,11 +61,12 @@ cv2_binaries = collect_dynamic_libs("cv2", search_patterns=["*.dll", "*.pyd"])
 package_source_datas = [
     (str(path), "py_src/geoscan")
     for path in (repo_root / "src" / "geoscan").glob("*.py")
+    if path.stem not in PRIVATE_MODULES
 ]
 
 a = Analysis(
     [str(repo_root / "packaging" / "gui_entry.py")],
-    pathex=[str(repo_root)],
+    pathex=[str(repo_root / "src"), str(repo_root)],
     binaries=[*rapidocr_binaries, *ort_binaries, *cv2_binaries],
     datas=[
         (
@@ -61,10 +88,10 @@ a = Analysis(
         *cv2_datas,
     ],
     hiddenimports=[
-        "geoscan.production_gui",
-        "geoscan.batch_runner",
-        "geoscan.line_ai_review",
-        "geoscan.ocr_subprocess",
+        # Collect every PUBLIC geoscan submodule so function-level and string
+        # imports are covered regardless of the static import graph. Private
+        # modules are filtered out so they never enter the shipped installer.
+        *[m for m in collect_submodules("geoscan") if _is_public(m)],
         "PIL._tkinter_finder",
         "sv_ttk",
         *rapidocr_hidden,
