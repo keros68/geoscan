@@ -379,7 +379,9 @@ class ProductionGui(tk.Tk):
         super().__init__()
         self.title("GeoScan")
         self.geometry("1300x880")
-        self.minsize(1120, 780)
+        # Low minimum so the window fits small/low-res screens (e.g. 1366x768);
+        # the 设置/AI tabs scroll, so nothing is clipped when the window is short.
+        self.minsize(1040, 620)
         self._setup_style()
         self._messages: queue.Queue[tuple[str, str]] = queue.Queue()
 
@@ -592,8 +594,8 @@ class ProductionGui(tk.Tk):
 
         self.log_tab = ttk.Frame(self.notebook, padding=10)
         self.batch_tab = ttk.Frame(self.notebook, padding=10)
-        settings_tab = ttk.Frame(self.notebook, padding=10)
-        ai_tab = ttk.Frame(self.notebook, padding=10)
+        settings_tab = ttk.Frame(self.notebook)
+        ai_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.log_tab, text="运行日志")
         self.notebook.add(self.batch_tab, text="批量运行")
         self.notebook.add(settings_tab, text="设置")
@@ -601,8 +603,10 @@ class ProductionGui(tk.Tk):
 
         self._build_log_tab(self.log_tab)
         self._build_batch_tab(self.batch_tab)
-        self._build_settings_tab(settings_tab)
-        self._build_ai_tab(ai_tab)
+        # 设置 / AI 表单较高：套一层垂直滚动，低分辨率或小窗口下也能滚到看全，
+        # 底部内容不再被裁（见用户在低分辨率机器上的截图）。
+        self._build_settings_tab(self._scrollable_content(settings_tab))
+        self._build_ai_tab(self._scrollable_content(ai_tab))
 
         progress_row = ttk.Frame(root)
         progress_row.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(0, 6))
@@ -756,6 +760,34 @@ class ProductionGui(tk.Tk):
             text="留空=自动生成（正常用法）。只有要用人工整理过的文字层时才选择；不要选旧运行的输出。",
             style="Hint.TLabel",
         ).grid(row=13, column=1, columnspan=2, sticky="w")
+
+    def _scrollable_content(self, tab: ttk.Frame) -> ttk.Frame:
+        """Wrap a notebook tab in a vertical scroller and return the inner frame.
+
+        Tall forms (设置 / AI) can exceed the notebook's height on small windows or
+        low-resolution screens; without this their bottom rows are clipped and
+        unreachable. Build the tab's widgets into the returned frame instead.
+        """
+        canvas = tk.Canvas(tab, highlightthickness=0, borderwidth=0)
+        vsb = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        inner = ttk.Frame(canvas, padding=10)
+        window = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind(
+            "<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
+
+        # Mouse-wheel scrolling, active only while the pointer is over this tab.
+        def _on_wheel(event: "tk.Event") -> None:
+            canvas.yview_scroll(int(-event.delta / 120), "units")
+
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_wheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+        return inner
 
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
