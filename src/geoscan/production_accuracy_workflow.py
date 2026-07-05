@@ -28,7 +28,7 @@ def bundled_gdal_dir() -> Path | None:
 
     Lets colleague machines run DXF export without a QGIS install; the bundle
     is created by ``packaging/build_gdal_bundle`` docs and copied into
-    ``dist/mapgis_vectorize_gui/gdal`` by ``build_gui_exe.cmd``.
+    ``dist/GeoScan/gdal`` by ``build_gui_exe.cmd``.
     """
     if getattr(sys, "frozen", False):
         candidate = Path(sys.executable).resolve().parent / "gdal"
@@ -134,7 +134,7 @@ def ascii_safe_env_dir(path: Path, *, purpose: str) -> Path:
     raise RuntimeError(
         f"{purpose} 路径包含中文（非 ASCII）字符，ogr2ogr 读不到该目录，DXF 导出无法进行。\n"
         f"当前路径: {path}\n"
-        "请把程序整个文件夹移动到全英文路径（例如 E:\\mapgis_vectorize_gui）后重新运行。\n"
+        "请把程序整个文件夹移动到全英文路径（例如 E:\\GeoScan）后重新运行。\n"
         f"({purpose} contains non-ASCII characters and no ASCII-safe fallback is "
         "available; move the app folder to an ASCII-only path.)"
     )
@@ -154,7 +154,7 @@ def non_ascii_install_path_problem() -> str | None:
         "程序所在路径包含中文（非 ASCII）字符，且本机没有可用的英文临时目录，"
         "导出 DXF 时会失败。\n"
         f"GDAL_DATA: {gdal_data}\n"
-        "请把程序整个文件夹移动到全英文路径（例如 E:\\mapgis_vectorize_gui）后重新打开。"
+        "请把程序整个文件夹移动到全英文路径（例如 E:\\GeoScan）后重新打开。"
     )
 
 

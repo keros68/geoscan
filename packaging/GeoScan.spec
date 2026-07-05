@@ -1,7 +1,7 @@
 # PyInstaller spec for the standalone MapGIS semi-auto vectorization GUI.
 # Build from the repo root:
-#   pyinstaller packaging/mapgis_vectorize_gui.spec --noconfirm
-# Output: dist/mapgis_vectorize_gui/ (one-folder; copy the whole folder).
+#   pyinstaller packaging/GeoScan.spec --noconfirm
+# Output: dist/GeoScan/ (one-folder; copy the whole folder).
 
 from pathlib import Path
 
@@ -96,7 +96,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="mapgis_vectorize_gui",
+    name="GeoScan",
     debug=False,
     strip=False,
     upx=False,
@@ -110,5 +110,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="mapgis_vectorize_gui",
+    name="GeoScan",
 )

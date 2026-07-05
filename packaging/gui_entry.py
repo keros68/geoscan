@@ -1,8 +1,8 @@
 """PyInstaller entry point for the standalone MapGIS semi-auto vectorization GUI.
 
-``mapgis_vectorize_gui.exe``          -> starts the GUI
-``mapgis_vectorize_gui.exe --check``  -> headless startup check (build smoke test)
-``mapgis_vectorize_gui.exe --batch ...`` -> command-line batch runner (same args
+``GeoScan.exe``          -> starts the GUI
+``GeoScan.exe --check``  -> headless startup check (build smoke test)
+``GeoScan.exe --batch ...`` -> command-line batch runner (same args
 as ``python -m geoscan.batch_runner run``)
 """
 
@@ -18,9 +18,9 @@ def main() -> int:
             "\n".join(
                 [
                     "Usage:",
-                    "  mapgis_vectorize_gui.exe",
-                    "  mapgis_vectorize_gui.exe --check",
-                    "  mapgis_vectorize_gui.exe --batch --project-root <workdir> --source-dir <tiff-folder> [options]",
+                    "  GeoScan.exe",
+                    "  GeoScan.exe --check",
+                    "  GeoScan.exe --batch --project-root <workdir> --source-dir <tiff-folder> [options]",
                     "",
                     "Batch options are the same as:",
                     "  python -m geoscan.batch_runner run --help",

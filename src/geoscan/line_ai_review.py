@@ -46,7 +46,7 @@ def build_repaired_line_review_prompt(
     map_id: str, candidate_lines: list[str], *, omitted_count: int
 ) -> str:
     lines = [
-        f"你是 MapGIS 半自动矢量化的修复线候选复核员。当前图幅: {map_id}。",
+        f"你是 GeoScan 的修复线候选复核员。当前图幅: {map_id}。",
         "附图是 QA 叠加图：红色为原始 Hough 候选，绿色为保守修复后的候选（共线合并、四边证据矩形规整）。",
         "任务：只做审查建议。对下面列出的修复产生的候选（按 candidate_id）给出 accept/reject/unsure，",
         "标出疑似文字笔画伪线的 candidate_id，并给出区域分类建议（表格/图框/文字密集区等）。",

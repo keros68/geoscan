@@ -1,10 +1,10 @@
 """Client-side auto-update against GitHub Releases.
 
-GeoScan is distributed as a Windows installer (``MapGISVectorizeSetup.exe``)
+GeoScan is distributed as a Windows installer (``GeoScanSetup.exe``)
 published as a GitHub Release asset. This module lets an installed copy check
 whether a newer release exists, download the new installer, verify it, and hand
 off to it — the installer then upgrades in place while user config in
-``%LOCALAPPDATA%\\MapGISVectorize\\config`` is left untouched.
+``%LOCALAPPDATA%\\GeoScan\\config`` is left untouched.
 
 Security posture (public repo — no secrets needed):
   - The repo is public, so release assets are downloadable with NO credentials.
@@ -40,7 +40,7 @@ RELEASES_LATEST_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/late
 
 # The installer asset to look for on a release. Must match the Inno Setup
 # OutputBaseFilename in release/installer/installer.iss.
-INSTALLER_ASSET_NAME = "MapGISVectorizeSetup.exe"
+INSTALLER_ASSET_NAME = "GeoScanSetup.exe"
 
 # GitHub's API requires a User-Agent; identify ourselves plainly.
 _USER_AGENT = f"GeoScan-Updater/{__version__} (+https://github.com/{GITHUB_REPO})"

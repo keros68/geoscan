@@ -45,12 +45,12 @@ FORBIDDEN_KEY_FRAGMENTS = ("api_key", "apikey", "token", "secret")
 # Per-user, writable, update-surviving config location. Installed apps live in a
 # read-only folder (Program Files) that a self-updater rewrites wholesale, so
 # settings and the encrypted key must NOT sit next to the exe. They move to
-# %LOCALAPPDATA%\MapGISVectorize\config\. A machine-local override env var helps
+# %LOCALAPPDATA%\GeoScan\config\. A machine-local override env var helps
 # tests and power users. NOTE: this dir may contain a non-ASCII (Chinese)
 # username; only plain config text goes here — never GDAL_DATA/PROJ_LIB or the
 # gdal bundle, which ogr2ogr cannot read from a non-ASCII path.
 CONFIG_DIR_ENV = "MAPGIS_CONFIG_DIR"
-APP_CONFIG_SUBDIR = ("MapGISVectorize", "config")
+APP_CONFIG_SUBDIR = ("GeoScan", "config")
 
 
 def config_dir() -> Path:

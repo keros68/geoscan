@@ -332,7 +332,7 @@ def friendly_error_message(exc: Exception) -> str:
 class ProductionGui(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("MapGIS 半自动矢量化工具")
+        self.title("GeoScan")
         self.geometry("1000x780")
         self.minsize(880, 680)
         self._setup_style()

@@ -30,7 +30,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-if (-not $GdalDir) { $GdalDir = Join-Path $repoRoot "dist\mapgis_vectorize_gui\gdal" }
+if (-not $GdalDir) { $GdalDir = Join-Path $repoRoot "dist\GeoScan\gdal" }
 if (-not (Test-Path $GdalDir)) { throw "GDAL dir not found: $GdalDir (build first)" }
 if (-not $Python) {
     $venvPy = Join-Path $repoRoot ".venv_build\Scripts\python.exe"

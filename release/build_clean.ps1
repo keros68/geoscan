@@ -30,8 +30,8 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if (-not $VenvDir) { $VenvDir = Join-Path $repoRoot ".venv_build" }
 $venvPython = Join-Path $VenvDir "Scripts\python.exe"
-$spec = Join-Path $repoRoot "packaging\mapgis_vectorize_gui.spec"
-$distDir = Join-Path $repoRoot "dist\mapgis_vectorize_gui"
+$spec = Join-Path $repoRoot "packaging\GeoScan.spec"
+$distDir = Join-Path $repoRoot "dist\GeoScan"
 
 function Section($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
 
@@ -113,7 +113,7 @@ Get-ChildItem $distDir | ForEach-Object {
 
 # 8. Smoke test -------------------------------------------------------------
 Section "Smoke test (--check)"
-& (Join-Path $distDir "mapgis_vectorize_gui.exe") --check
+& (Join-Path $distDir "GeoScan.exe") --check
 Write-Host "`nBuild finished: $distDir" -ForegroundColor Green
 if ($TrimGdal) {
     Write-Warning "GDAL was trimmed. RUN A REAL DXF EXPORT (line + text) before shipping to confirm no driver DLL is missing."

@@ -54,7 +54,7 @@ def normalize_chat_completions_url(base_url: str) -> str:
 def build_map_structure_prompt(map_id: str) -> str:
     return "\n".join(
         [
-            f"你是 MapGIS 半自动矢量化的地图结构复核员。当前图幅: {map_id}。",
+            f"你是 GeoScan 的地图结构复核员。当前图幅: {map_id}。",
             "任务：观察整张图，只给出会影响后续线条闭合、表格/图框重建、文字占位的关键区域建议。",
             "边界：review_only 必须为 true。不要输出最终矢量坐标，不要输出可直接写入 WL/WT/WP 的几何，不要写 checked=yes。",
             "不要解释或发明地质含义、地层代码、矿体边界或缺失内容。",

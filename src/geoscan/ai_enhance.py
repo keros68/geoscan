@@ -238,7 +238,7 @@ def build_enhance_prompt(
     thresholds: AiEnhanceThresholds,
 ) -> str:
     lines = [
-        f"你是 MapGIS 半自动矢量化的增强提名员。当前图幅: {map_id}。",
+        f"你是 GeoScan 的增强提名员。当前图幅: {map_id}。",
         "附图是修复后线候选的 QA 叠加图。你只提名操作，坐标由程序计算并用栅格证据验证。",
         "可用操作（严格限定，其他一律无效）：",
         f"1. bridge_gap：图上明显是同一条线但候选断开（缺口不超过 {thresholds.max_gap_px:.0f} 像素）时，"
