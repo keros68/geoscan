@@ -829,13 +829,28 @@ class ProductionGui(tk.Tk):
         notes = info.notes.strip()
         if len(notes) > 800:
             notes = notes[:800] + "…"
-        size_mb = info.installer_size / (1024 * 1024) if info.installer_size else 0
-        prompt = (
-            f"发现新版本：v{info.latest}（当前 v{info.current}）。\n"
-            f"安装包约 {size_mb:.1f} MB。\n\n"
-            f"{notes}\n\n"
-            "现在下载并安装？安装时本程序会关闭，你的本机设置不会丢失。"
-        )
+        size = info.download_size
+        if size >= 1024 * 1024:
+            size_text = f"{size / (1024 * 1024):.1f} MB"
+        elif size > 0:
+            size_text = f"{size / 1024:.0f} KB"
+        else:
+            size_text = "未知大小"
+
+        if info.kind == "engine":
+            prompt = (
+                f"发现新版本：v{info.latest}（当前 v{info.current}）。\n"
+                f"这是轻量更新，只需下载约 {size_text}（仅程序代码，不含运行库）。\n\n"
+                f"{notes}\n\n"
+                "现在更新？完成后程序会自动重启，你的设置不会丢失。"
+            )
+        else:
+            prompt = (
+                f"发现新版本：v{info.latest}（当前 v{info.current}）。\n"
+                f"完整安装包约 {size_text}。\n\n"
+                f"{notes}\n\n"
+                "现在下载并安装？安装时本程序会关闭，你的本机设置不会丢失。"
+            )
         if not messagebox.askyesno("发现新版本", prompt):
             return
         self._download_and_install_update(info)
@@ -857,12 +872,26 @@ class ProductionGui(tk.Tk):
 
         def worker() -> None:
             try:
-                path = updater.download_installer(info, progress=progress)
-                self.after(0, lambda: self._launch_downloaded_installer(path))
+                if info.kind == "engine":
+                    staging = updater.download_engine(info, progress=progress)
+                    self.after(0, lambda: self._apply_engine_update(staging))
+                else:
+                    path = updater.download_installer(info, progress=progress)
+                    self.after(0, lambda: self._launch_downloaded_installer(path))
             except updater.UpdateError as exc:
                 self.after(0, lambda: self._on_update_download_failed(str(exc)))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_engine_update(self, staging) -> None:
+        from geoscan import updater
+
+        self.status_var.set("下载完成，正在应用更新并重启…")
+        try:
+            # Applies the loose engine swap, then relaunches the app and exits.
+            updater.apply_engine_update_and_restart(staging)
+        except updater.UpdateError as exc:
+            self._on_update_download_failed(str(exc))
 
     def _on_update_download_failed(self, error: str) -> None:
         self.status_var.set("")

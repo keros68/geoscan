@@ -64,6 +64,28 @@ package_source_datas = [
     if path.stem not in PRIVATE_MODULES
 ]
 
+# ── Engine layer (two-layer update model) ─────────────────────────────────────
+# Ship the public `geoscan` package as LOOSE source under _internal/engine/ so a
+# code-only update replaces just this ~1 MB folder (a small engine-<ver>.zip)
+# instead of re-downloading the ~100 MB runtime. `geoscan` is still followed
+# during Analysis (below) so its deps are collected, but it is then dropped from
+# the frozen archive (`a.pure` filter) so the loose copy is the ONLY geoscan at
+# runtime. gui_entry puts this dir on sys.path[0] before importing geoscan.
+_geoscan_dir = repo_root / "src" / "geoscan"
+engine_datas = [
+    (str(path), "engine/geoscan")
+    for path in _geoscan_dir.glob("*.py")
+    if path.stem not in PRIVATE_MODULES
+]
+# The SECTION bootstrap resource is located relative to geoscan/__file__, so it
+# must travel with the loose engine (into engine/geoscan/section_bootstrap/).
+engine_datas.append(
+    (
+        str(_geoscan_dir / "section_bootstrap" / "SECTION_BOOTSTRAP.WT"),
+        "engine/geoscan/section_bootstrap",
+    )
+)
+
 a = Analysis(
     [str(repo_root / "packaging" / "gui_entry.py")],
     pathex=[str(repo_root / "src"), str(repo_root)],
@@ -81,7 +103,15 @@ a = Analysis(
             str(repo_root / "packaging" / "app_icon.ico"),
             ".",
         ),
+        (
+            # Runtime-layer version marker; the updater reads it to decide whether
+            # a release's engine zip matches this runtime (engine update) or needs
+            # the full installer (runtime bump). Bump when heavy deps change.
+            str(repo_root / "packaging" / "runtime_version.txt"),
+            ".",
+        ),
         *package_source_datas,
+        *engine_datas,
         *rapidocr_datas,
         *ort_datas,
         *svttk_datas,
@@ -115,6 +145,14 @@ a = Analysis(
     ],
     noarchive=False,
 )
+
+# Drop geoscan.* from the FROZEN archive so the loose engine/ copy (added as
+# datas above) is the only geoscan at runtime. Its dependencies were already
+# discovered by following geoscan during Analysis, so they stay bundled.
+a.pure[:] = [
+    entry for entry in a.pure
+    if entry[0] != "geoscan" and not entry[0].startswith("geoscan.")
+]
 
 pyz = PYZ(a.pure)
 

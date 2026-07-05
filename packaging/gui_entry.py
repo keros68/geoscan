@@ -10,6 +10,24 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+
+
+def _engine_dir() -> Path | None:
+    """The loose engine layer shipped next to the frozen runtime.
+
+    Two-layer update model: the `geoscan` package lives as loose source in
+    `<_internal>/engine/`, so a code update only replaces that ~1 MB folder.
+    Returns the dir to put on sys.path[0], or None when running from source
+    (dev), where the installed/editable `geoscan` is used as-is.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    base = Path(getattr(sys, "_MEIPASS", "") or Path(sys.executable).resolve().parent)
+    candidate = base / "engine"
+    if (candidate / "geoscan" / "__init__.py").is_file():
+        return candidate
+    return None
 
 
 def _silence_missing_std_streams() -> None:
@@ -27,6 +45,9 @@ def _silence_missing_std_streams() -> None:
 
 def main() -> int:
     _silence_missing_std_streams()
+    engine = _engine_dir()
+    if engine is not None:
+        sys.path.insert(0, str(engine))  # loose engine wins over anything else
     argv = sys.argv[1:]
     if argv and argv[0] in {"--help", "-h"}:
         print(
@@ -44,13 +65,16 @@ def main() -> int:
         )
         return 0
     if argv and argv[0] == "--check":
+        import geoscan
         from geoscan.app_settings import bootstrap_settings
         from geoscan.production_gui import ProductionGui
 
         bootstrap_settings()
         app = ProductionGui()
         app.destroy()
-        print("GUI startup check passed")
+        # Report where geoscan loaded from — confirms the loose engine layer is
+        # active (path under .../engine/geoscan) and its version.
+        print(f"GUI startup check passed (geoscan {geoscan.__version__} @ {geoscan.__file__})")
         return 0
     if argv and argv[0] == "--batch":
         from geoscan.batch_runner import main as batch_main

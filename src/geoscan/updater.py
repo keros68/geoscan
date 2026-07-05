@@ -1,21 +1,25 @@
-"""Client-side auto-update against GitHub Releases.
+"""Client-side auto-update against GitHub Releases (two-layer model).
 
-GeoScan is distributed as a Windows installer (``GeoScanSetup.exe``)
-published as a GitHub Release asset. This module lets an installed copy check
-whether a newer release exists, download the new installer, verify it, and hand
-off to it — the installer then upgrades in place while user config in
-``%LOCALAPPDATA%\\GeoScan\\config`` is left untouched.
+GeoScan installs as two layers:
+  * **runtime** — the frozen Python + numpy/cv2/onnxruntime/rapidocr/... (~100 MB,
+    changes rarely). Shipped only via the full installer ``GeoScanSetup.exe``.
+  * **engine** — the loose ``geoscan`` package under ``<_internal>/engine/`` (~1 MB,
+    changes every release). Shipped as a tiny ``engine-<ver>-rt<N>.zip`` asset.
 
-Security posture (public repo — no secrets needed):
-  - The repo is public, so release assets are downloadable with NO credentials.
-    Nothing sensitive is embedded here.
-  - Transport is HTTPS to api.github.com / the GitHub asset CDN.
-  - When the release asset carries a ``digest`` (``sha256:...``, which GitHub
-    now records for uploaded assets) the downloaded file is verified against it.
-    If absent, HTTPS is the integrity guard.
+So a normal code update downloads ~250 KB (the engine zip) and swaps the loose
+folder in place, instead of re-downloading the whole installer. When the runtime
+itself changes (rare), the release ships an engine zip tagged with a new ``rt``
+number that no installed client matches, and the client falls back to the full
+installer.
 
-Dependency-free on purpose (stdlib ``urllib`` only) so it works inside the
-frozen one-folder build without pulling extra wheels.
+Release assets per version:
+  * ``GeoScanSetup.exe``            — full installer (new installs, runtime bumps)
+  * ``engine-<ver>-rt<N>.zip``      — engine-only update for runtime line ``N``
+
+Security posture (public repo — no secrets needed): assets are downloadable with
+no credentials; transport is HTTPS; each download is sha256-verified against the
+GitHub-recorded asset ``digest`` when present. Stdlib-only (urllib/zipfile) so it
+works inside the frozen build with no extra wheels.
 """
 
 from __future__ import annotations
@@ -23,11 +27,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import urllib.error
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -42,6 +49,12 @@ RELEASES_LATEST_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/late
 # OutputBaseFilename in release/installer/installer.iss.
 INSTALLER_ASSET_NAME = "GeoScanSetup.exe"
 
+# Engine asset name: engine-<engineVersion>-rt<runtimeVersion>.zip
+_ENGINE_ASSET_RE = re.compile(r"^engine-(?P<ver>[0-9][0-9A-Za-z.\-]*)-rt(?P<rt>[0-9A-Za-z.]+)\.zip$")
+
+# Fallback when no runtime_version.txt ships (older/dev builds).
+RUNTIME_VERSION_FALLBACK = "1"
+
 # GitHub's API requires a User-Agent; identify ourselves plainly.
 _USER_AGENT = f"GeoScan-Updater/{__version__} (+https://github.com/{GITHUB_REPO})"
 
@@ -53,12 +66,22 @@ class UpdateInfo:
     current: str
     latest: str
     update_available: bool
+    kind: str = "none"  # "engine" (lightweight) | "installer" (full) | "none"
     tag: str = ""
+    # Full installer (also the fallback when an engine update is not applicable).
     installer_url: str = ""
     installer_size: int = 0
-    installer_sha256: str = ""  # lowercase hex, or "" if the release didn't record one
+    installer_sha256: str = ""
+    # Lightweight engine zip.
+    engine_url: str = ""
+    engine_size: int = 0
+    engine_sha256: str = ""
     notes: str = ""
     html_url: str = ""
+
+    @property
+    def download_size(self) -> int:
+        return self.engine_size if self.kind == "engine" else self.installer_size
 
 
 class UpdateError(RuntimeError):
@@ -84,6 +107,55 @@ def is_newer(remote: str, local: str) -> bool:
 
 def current_version() -> str:
     return __version__
+
+
+# ---------------------------------------------------------------------------
+# Install layout (frozen two-layer build)
+# ---------------------------------------------------------------------------
+def _frozen_internal_dir() -> Path | None:
+    """The frozen build's ``_internal`` dir (``sys._MEIPASS``), or None in dev."""
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", "")
+        if base:
+            return Path(base)
+    return None
+
+
+def installed_runtime_version() -> str:
+    """Runtime-layer version, from ``runtime_version.txt`` shipped in the build."""
+    base = _frozen_internal_dir()
+    if base is not None:
+        path = base / "runtime_version.txt"
+        try:
+            if path.is_file():
+                return path.read_text(encoding="utf-8").strip() or RUNTIME_VERSION_FALLBACK
+        except OSError:
+            pass
+    return RUNTIME_VERSION_FALLBACK
+
+
+def engine_dir() -> Path | None:
+    """The loose engine dir (``<_internal>/engine``) holding ``geoscan/``, or None."""
+    base = _frozen_internal_dir()
+    if base is not None:
+        candidate = base / "engine"
+        if (candidate / "geoscan" / "__init__.py").is_file():
+            return candidate
+    return None
+
+
+def _engine_writable() -> bool:
+    """Whether we can write into the engine dir (per-user installs: yes)."""
+    directory = engine_dir()
+    if directory is None:
+        return False
+    try:
+        probe = directory / ".geoscan_write_probe"
+        probe.write_text("x", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -113,83 +185,21 @@ def _explain_http_error(exc: urllib.error.HTTPError) -> str:
     return f"更新服务器返回错误 HTTP {exc.code}。"
 
 
-def _pick_installer_asset(assets: list[dict]) -> dict | None:
-    # Exact filename first, then any .exe as a fallback.
-    for asset in assets:
-        if asset.get("name") == INSTALLER_ASSET_NAME:
-            return asset
-    for asset in assets:
-        if str(asset.get("name", "")).lower().endswith(".exe"):
-            return asset
-    return None
-
-
-def _asset_sha256(asset: dict) -> str:
-    # GitHub records an asset digest like "sha256:abcd..." when available.
-    digest = str(asset.get("digest", ""))
-    if digest.startswith("sha256:"):
-        return digest[len("sha256:"):].lower()
-    return ""
-
-
-def check_for_update(timeout: float = 12.0) -> UpdateInfo:
-    """Query the latest GitHub release and compare it with the running version.
-
-    Raises UpdateError on any network/parse failure so the GUI can show a
-    friendly message. Never raises for the ordinary "already up to date" case.
-    """
-    raw = _http_get(RELEASES_LATEST_API, timeout, accept="application/vnd.github+json")
-    try:
-        release = json.loads(raw.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise UpdateError("更新信息解析失败（服务器返回了非预期内容）。") from exc
-
-    if release.get("draft") or release.get("prerelease"):
-        # /releases/latest already excludes these, but be defensive.
-        return UpdateInfo(current=__version__, latest=__version__, update_available=False)
-
-    tag = str(release.get("tag_name", "")).strip()
-    latest = tag.lstrip("vV") or "0.0.0"
-    asset = _pick_installer_asset(release.get("assets") or [])
-
-    available = is_newer(latest, __version__) and asset is not None
-    return UpdateInfo(
-        current=__version__,
-        latest=latest,
-        update_available=available,
-        tag=tag,
-        installer_url=str(asset.get("browser_download_url", "")) if asset else "",
-        installer_size=int(asset.get("size", 0)) if asset else 0,
-        installer_sha256=_asset_sha256(asset) if asset else "",
-        notes=str(release.get("body", "") or ""),
-        html_url=str(release.get("html_url", "")),
-    )
-
-
-def download_installer(
-    info: UpdateInfo,
-    dest_dir: Path | None = None,
-    timeout: float = 300.0,
-    progress: Callable[[int, int], None] | None = None,
-) -> Path:
-    """Download the release installer, verifying sha256 when the release has one.
-
-    Returns the path to the downloaded ``.exe``. ``progress(done, total)`` is
-    called as bytes arrive (total may be 0 if the server omits Content-Length).
-    """
-    if not info.installer_url:
-        raise UpdateError("该版本没有可下载的安装包资产。")
-
-    dest_dir = dest_dir or Path(tempfile.mkdtemp(prefix="geoscan_update_"))
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    target = dest_dir / INSTALLER_ASSET_NAME
-
-    req = urllib.request.Request(info.installer_url)
+def _download_to(
+    url: str,
+    target: Path,
+    sha256: str,
+    size_hint: int,
+    timeout: float,
+    progress: Callable[[int, int], None] | None,
+) -> None:
+    """Stream a URL to ``target``, verifying sha256 when one is given."""
+    req = urllib.request.Request(url)
     req.add_header("User-Agent", _USER_AGENT)
     hasher = hashlib.sha256()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-            total = int(resp.headers.get("Content-Length") or info.installer_size or 0)
+            total = int(resp.headers.get("Content-Length") or size_hint or 0)
             done = 0
             with open(target, "wb") as fh:
                 while True:
@@ -202,42 +212,210 @@ def download_installer(
                     if progress:
                         progress(done, total)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise UpdateError(f"下载安装包失败：{exc}") from exc
+        raise UpdateError(f"下载失败：{exc}") from exc
 
-    if info.installer_sha256:
-        got = hasher.hexdigest().lower()
-        if got != info.installer_sha256:
-            try:
-                target.unlink()
-            except OSError:
-                pass
-            raise UpdateError(
-                "安装包校验失败（sha256 不匹配），已删除下载文件。请重试或从项目主页手动下载。"
-            )
+    if sha256 and hasher.hexdigest().lower() != sha256.lower():
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        raise UpdateError("下载文件校验失败（sha256 不匹配），已删除。请重试或从项目主页手动下载。")
+
+
+def _pick_installer_asset(assets: list[dict]) -> dict | None:
+    for asset in assets:
+        if asset.get("name") == INSTALLER_ASSET_NAME:
+            return asset
+    for asset in assets:  # fallback: any .exe
+        if str(asset.get("name", "")).lower().endswith(".exe"):
+            return asset
+    return None
+
+
+def _pick_engine_asset(assets: list[dict], latest: str, runtime: str) -> dict | None:
+    """The engine zip for this release version AND the installed runtime line."""
+    for asset in assets:
+        match = _ENGINE_ASSET_RE.match(str(asset.get("name", "")))
+        if (
+            match
+            and _parse_version(match.group("ver")) == _parse_version(latest)
+            and match.group("rt") == str(runtime)
+        ):
+            return asset
+    return None
+
+
+def _asset_sha256(asset: dict) -> str:
+    digest = str(asset.get("digest", ""))
+    if digest.startswith("sha256:"):
+        return digest[len("sha256:"):].lower()
+    return ""
+
+
+def check_for_update(timeout: float = 12.0) -> UpdateInfo:
+    """Query the latest release and decide whether/how to update.
+
+    Prefers a lightweight engine update when the release ships an engine zip for
+    the installed runtime line and the engine dir is writable; otherwise falls
+    back to the full installer. Raises UpdateError on network/parse failure;
+    never raises for the ordinary "already up to date" case.
+    """
+    raw = _http_get(RELEASES_LATEST_API, timeout, accept="application/vnd.github+json")
+    try:
+        release = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise UpdateError("更新信息解析失败（服务器返回了非预期内容）。") from exc
+
+    if release.get("draft") or release.get("prerelease"):
+        return UpdateInfo(current=__version__, latest=__version__, update_available=False)
+
+    tag = str(release.get("tag_name", "")).strip()
+    latest = tag.lstrip("vV") or "0.0.0"
+    notes = str(release.get("body", "") or "")
+    html_url = str(release.get("html_url", ""))
+
+    if not is_newer(latest, __version__):
+        return UpdateInfo(
+            current=__version__, latest=latest, update_available=False,
+            tag=tag, notes=notes, html_url=html_url,
+        )
+
+    assets = release.get("assets") or []
+    installer = _pick_installer_asset(assets)
+    engine = _pick_engine_asset(assets, latest, installed_runtime_version())
+
+    installer_fields = dict(
+        installer_url=str(installer.get("browser_download_url", "")) if installer else "",
+        installer_size=int(installer.get("size", 0)) if installer else 0,
+        installer_sha256=_asset_sha256(installer) if installer else "",
+    )
+
+    # Lightweight path: an engine zip matching our runtime, and a writable engine dir.
+    if engine is not None and engine_dir() is not None and _engine_writable():
+        return UpdateInfo(
+            current=__version__, latest=latest, update_available=True, kind="engine",
+            tag=tag, notes=notes, html_url=html_url,
+            engine_url=str(engine.get("browser_download_url", "")),
+            engine_size=int(engine.get("size", 0)),
+            engine_sha256=_asset_sha256(engine),
+            **installer_fields,  # keep installer as a fallback
+        )
+
+    if installer is not None:
+        return UpdateInfo(
+            current=__version__, latest=latest, update_available=True, kind="installer",
+            tag=tag, notes=notes, html_url=html_url, **installer_fields,
+        )
+
+    # Newer version exists but nothing we can install.
+    return UpdateInfo(
+        current=__version__, latest=latest, update_available=False,
+        tag=tag, notes=notes, html_url=html_url,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Full installer path
+# ---------------------------------------------------------------------------
+def download_installer(
+    info: UpdateInfo,
+    dest_dir: Path | None = None,
+    timeout: float = 300.0,
+    progress: Callable[[int, int], None] | None = None,
+) -> Path:
+    """Download the release installer, verifying sha256 when the release has one."""
+    if not info.installer_url:
+        raise UpdateError("该版本没有可下载的安装包资产。")
+    dest_dir = dest_dir or Path(tempfile.mkdtemp(prefix="geoscan_update_"))
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target = dest_dir / INSTALLER_ASSET_NAME
+    _download_to(info.installer_url, target, info.installer_sha256, info.installer_size, timeout, progress)
     return target
 
 
 def launch_installer_and_exit(installer: Path) -> None:
-    """Start the downloaded installer and quit this process.
-
-    The running exe/dll are locked on Windows, so the installer — a separate
-    process writing to the same install dir — performs the swap. We exit
-    immediately so nothing stays locked.
-    """
+    """Start the downloaded installer and quit this process."""
     installer = Path(installer)
     if not installer.is_file():
         raise UpdateError(f"安装包不存在：{installer}")
+    _spawn_detached([str(installer)])
+    os._exit(0)
+
+
+# ---------------------------------------------------------------------------
+# Lightweight engine path
+# ---------------------------------------------------------------------------
+def download_engine(
+    info: UpdateInfo,
+    dest_dir: Path | None = None,
+    timeout: float = 120.0,
+    progress: Callable[[int, int], None] | None = None,
+) -> Path:
+    """Download + verify + extract the engine zip. Returns the extracted dir
+    (which contains a ``geoscan/`` package)."""
+    if not info.engine_url:
+        raise UpdateError("该版本没有可下载的引擎包。")
+    dest_dir = dest_dir or Path(tempfile.mkdtemp(prefix="geoscan_engine_"))
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = dest_dir / "engine.zip"
+    _download_to(info.engine_url, zip_path, info.engine_sha256, info.engine_size, timeout, progress)
+
+    extract_dir = dest_dir / "extracted"
+    extract_dir.mkdir(exist_ok=True)
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(extract_dir)
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise UpdateError(f"引擎包解压失败：{exc}") from exc
+    if not (extract_dir / "geoscan" / "__init__.py").is_file():
+        raise UpdateError("引擎包结构异常（缺少 geoscan/ 包）。")
+    return extract_dir
+
+
+def apply_engine_update(staging: Path) -> None:
+    """Overwrite the live engine's ``geoscan/`` with the staged copy.
+
+    Loose .py files are not locked on Windows once imported, so we overwrite in
+    place; stale bytecode is dropped so the fresh sources win on next start.
+    """
+    live = engine_dir()
+    if live is None:
+        raise UpdateError("未找到引擎目录，无法应用引擎更新。")
+    src_pkg = Path(staging) / "geoscan"
+    dst_pkg = live / "geoscan"
+    if not src_pkg.is_dir():
+        raise UpdateError("引擎包缺少 geoscan/。")
+    try:
+        for root, _dirs, files in os.walk(src_pkg):
+            rel = Path(root).relative_to(src_pkg)
+            target_dir = dst_pkg / rel
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for name in files:
+                shutil.copy2(Path(root) / name, target_dir / name)
+        for pycache in dst_pkg.rglob("__pycache__"):
+            shutil.rmtree(pycache, ignore_errors=True)
+    except OSError as exc:
+        raise UpdateError(f"应用引擎更新失败：{exc}") from exc
+
+
+def apply_engine_update_and_restart(staging: Path) -> None:
+    """Apply the engine update, then relaunch the app and exit."""
+    apply_engine_update(staging)
+    _spawn_detached([sys.executable])
+    os._exit(0)
+
+
+# ---------------------------------------------------------------------------
+def _spawn_detached(argv: list[str]) -> None:
     if sys.platform == "win32":
-        # Detached so it survives our exit; no shell.
         subprocess.Popen(  # noqa: S603
-            [str(installer)],
+            argv,
             close_fds=True,
             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
         )
-    else:  # pragma: no cover - installer is Windows-only
-        subprocess.Popen([str(installer)], close_fds=True)  # noqa: S603
-    os._exit(0)  # hard-exit so no lingering Tk/atexit re-locks files
+    else:  # pragma: no cover - frozen app is Windows-only
+        subprocess.Popen(argv, close_fds=True)  # noqa: S603
 
 
 __all__ = [
@@ -246,7 +424,12 @@ __all__ = [
     "UpdateError",
     "current_version",
     "is_newer",
+    "installed_runtime_version",
+    "engine_dir",
     "check_for_update",
     "download_installer",
     "launch_installer_and_exit",
+    "download_engine",
+    "apply_engine_update",
+    "apply_engine_update_and_restart",
 ]

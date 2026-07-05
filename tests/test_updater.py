@@ -196,3 +196,86 @@ def test_launch_starts_process_and_exits(monkeypatch, tmp_path):
 def test_repo_constant_matches_api_url():
     assert updater.GITHUB_REPO in updater.RELEASES_LATEST_API
     assert updater.RELEASES_LATEST_API.startswith("https://api.github.com/")
+
+
+# --------------------------------------------------------------------------
+# Two-layer engine update path
+# --------------------------------------------------------------------------
+def test_pick_engine_asset_matches_version_and_runtime():
+    assets = [
+        {"name": "engine-0.2.0-rt1.zip", "browser_download_url": "u1"},
+        {"name": "engine-0.2.0-rt2.zip", "browser_download_url": "u2"},
+        {"name": "GeoScanSetup.exe"},
+    ]
+    assert updater._pick_engine_asset(assets, "0.2.0", "1")["name"] == "engine-0.2.0-rt1.zip"
+    assert updater._pick_engine_asset(assets, "0.2.0", "9") is None  # no matching runtime
+    assert updater._pick_engine_asset(assets, "0.3.0", "1") is None  # version mismatch
+
+
+def _release_with_engine(tag, rt):
+    return json.dumps(
+        {
+            "tag_name": tag,
+            "body": "notes",
+            "assets": [
+                {"name": "GeoScanSetup.exe", "browser_download_url": "https://x/GeoScanSetup.exe",
+                 "size": 100_000, "digest": "sha256:" + "aa" * 32},
+                {"name": f"engine-{tag.lstrip('v')}-rt{rt}.zip", "browser_download_url": "https://x/engine.zip",
+                 "size": 2048, "digest": "sha256:" + "bb" * 32},
+            ],
+        }
+    ).encode()
+
+
+def test_check_prefers_lightweight_engine_update(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "__version__", "0.1.0")
+    monkeypatch.setattr(updater, "installed_runtime_version", lambda: "1")
+    monkeypatch.setattr(updater, "engine_dir", lambda: tmp_path)
+    monkeypatch.setattr(updater, "_engine_writable", lambda: True)
+    _patch_get(monkeypatch, _release_with_engine("v0.2.0", "1"))
+    info = updater.check_for_update()
+    assert info.update_available and info.kind == "engine"
+    assert info.engine_url == "https://x/engine.zip"
+    assert info.engine_sha256 == "bb" * 32
+    assert info.download_size == 2048
+    assert info.installer_url.endswith("GeoScanSetup.exe")  # fallback still carried
+
+
+def test_check_falls_back_to_installer_on_runtime_mismatch(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "__version__", "0.1.0")
+    monkeypatch.setattr(updater, "installed_runtime_version", lambda: "1")
+    monkeypatch.setattr(updater, "engine_dir", lambda: tmp_path)
+    monkeypatch.setattr(updater, "_engine_writable", lambda: True)
+    _patch_get(monkeypatch, _release_with_engine("v0.2.0", "2"))  # engine built for runtime 2
+    info = updater.check_for_update()
+    assert info.update_available and info.kind == "installer"
+
+
+def test_apply_engine_update_overwrites_live_package(monkeypatch, tmp_path):
+    live = tmp_path / "engine"
+    (live / "geoscan").mkdir(parents=True)
+    (live / "geoscan" / "__init__.py").write_text("__version__ = 'old'", encoding="utf-8")
+    (live / "geoscan" / "keep.py").write_text("untouched", encoding="utf-8")
+    staging = tmp_path / "staging"
+    (staging / "geoscan").mkdir(parents=True)
+    (staging / "geoscan" / "__init__.py").write_text("__version__ = 'new'", encoding="utf-8")
+
+    monkeypatch.setattr(updater, "engine_dir", lambda: live)
+    updater.apply_engine_update(staging)
+
+    assert "new" in (live / "geoscan" / "__init__.py").read_text(encoding="utf-8")
+    assert (live / "geoscan" / "keep.py").exists()  # pre-existing files remain
+
+
+def test_download_engine_extracts_geoscan(monkeypatch, tmp_path):
+    buf = io.BytesIO()
+    with __import__("zipfile").ZipFile(buf, "w") as zf:
+        zf.writestr("geoscan/__init__.py", "__version__ = '0.2.0'")
+    data = buf.getvalue()
+    _patch_urlopen(monkeypatch, data)
+    info = updater.UpdateInfo(
+        current="0.1.0", latest="0.2.0", update_available=True, kind="engine",
+        engine_url="https://x/engine.zip", engine_size=len(data),
+    )
+    out = updater.download_engine(info, dest_dir=tmp_path)
+    assert (out / "geoscan" / "__init__.py").is_file()
