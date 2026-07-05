@@ -1,0 +1,40 @@
+# Real runtime dependencies ONLY — verified against every import in
+# mapgis_work/semiauto_vectorize plus rapidocr 3.9's own `Requires`.
+#
+# The 636 MB build was bloated by libs the app NEVER imports, dragged in
+# transitively by a polluted dev env:
+#   PyMatting        -> numba + llvmlite   (~108 MB)
+#   scikit-image     -> scipy              (~72 MB)
+#   scikit-learn     -> scipy
+#   seaborn          -> pandas             (~16 MB)
+#   + dev-only IPython / jedi / psycopg2
+# Installing ONLY the list below into a clean venv keeps PyInstaller from ever
+# seeing them. See release/build_clean.ps1.
+#
+# NOTE: rapidocr's metadata requires `opencv_python` (the GUI wheel). We install
+# opencv-python-headless instead (rapidocr only does `import cv2`, headless is
+# enough) and build_clean.ps1 uninstalls the non-headless copy pip pulls in.
+
+pyinstaller==6.21.0
+
+# --- image + OCR core (rapidocr pulls numpy/Pillow/shapely/pyclipper/omegaconf/
+#     colorlog/pyyaml/requests/tqdm/six automatically; pinned here for clarity) ---
+opencv-python-headless==4.13.0.92
+numpy==2.2.6
+onnxruntime==1.27.0
+rapidocr==3.9.0
+shapely==2.1.2
+pyclipper==1.4.0
+Pillow==11.3.0
+omegaconf
+colorlog
+PyYAML
+requests
+tqdm
+six
+
+# --- Windows / GUI / crypto ---
+pywin32          # win32crypt (DPAPI key), win32gui (SECTION bridge)
+sv-ttk           # Sun Valley theme
+lxml             # present in the working build; keep unless a build proves it unused
+cryptography     # Phase 2: verify the Ed25519-signed latest.json

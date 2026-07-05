@@ -1,0 +1,8 @@
+{
+  "_comment": "复制本文件为 mapgis_settings.json 放在 exe 同目录，按本机实际路径修改。不要在这里放任何 API Key。ogr2ogr/gdal_data 留空时使用程序自带 GDAL。",
+  "ogr2ogr": "",
+  "gdal_data": "",
+  "section_exe": "",
+  "w60_conv_exe": "",
+  "ocr_python": ""
+}
