@@ -62,8 +62,10 @@ STATUS_FIELDS = [
     "line_candidates",
     "repaired_candidates",
     "text_candidates",
+    "area_candidates",
     "line_dxf_status",
     "text_dxf_status",
+    "area_shp_status",
     "conversion_status",
     "elapsed_seconds",
     "finished_at_utc",
@@ -84,6 +86,7 @@ class BatchConfig:
     ai_base_url: str = ""
     ai_api_key: str = ""
     ai_model: str = ""
+    include_areas: bool = False
     ocr_python: Path | None = None
     retry_incomplete: bool = False
     limit: int | None = None
@@ -129,17 +132,26 @@ def _dxf_status(report: dict[str, Any] | None) -> str:
     return str((report.get("dxf_export") or {}).get("status") or "absent")
 
 
+def _shp_status(report: dict[str, Any] | None) -> str:
+    if not report:
+        return "absent"
+    return str((report.get("shp_export") or {}).get("status") or "absent")
+
+
 def _row_from_run_report(report: dict[str, Any]) -> dict[str, Any]:
     line_generation = report.get("line_candidate_generation") or {}
     text_generation = report.get("text_candidate_generation") or {}
+    area_generation = report.get("area_candidate_generation") or {}
     repair = report.get("line_repair") or {}
     return {
         "line_engine": report.get("line_engine") or line_generation.get("engine") or "",
         "line_candidates": line_generation.get("feature_count", ""),
         "repaired_candidates": repair.get("repaired_feature_count", ""),
         "text_candidates": text_generation.get("feature_count", ""),
+        "area_candidates": area_generation.get("feature_count", ""),
         "line_dxf_status": _dxf_status(report.get("line")),
         "text_dxf_status": _dxf_status(report.get("text")),
+        "area_shp_status": _shp_status(report.get("area")),
         "conversion_status": (report.get("conversion") or {}).get("status", ""),
     }
 
@@ -204,6 +216,7 @@ def run_batch(
         "line_engine": config.line_engine,
         "line_repair": config.line_repair,
         "line_export_source": config.line_export_source,
+        "include_areas": config.include_areas,
         "one_map_at_a_time": True,
         "queue_size": len(config.source_rasters),
         "counts": counts,
@@ -295,6 +308,7 @@ def run_batch(
                     ai_base_url=config.ai_base_url,
                     ai_api_key=config.ai_api_key,
                     ai_model=config.ai_model,
+                    include_areas=config.include_areas,
                     conversion_mode=config.conversion_mode,
                     line_engine=config.line_engine,
                     line_repair=config.line_repair,
@@ -360,6 +374,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--ai-enhance",
         action="store_true",
         help="Optional additive AI enhance stage per map (requires --ai-provider and --line-repair).",
+    )
+    run.add_argument(
+        "--include-areas",
+        action="store_true",
+        help="Optional per-map WP area candidates and Shapefile exchange package.",
     )
     run.add_argument("--ai-provider", default="none")
     run.add_argument("--ai-base-url", default="")
@@ -430,6 +449,7 @@ def main(argv: list[str] | None = None) -> int:
                 ai_base_url=args.ai_base_url,
                 ai_api_key=args.ai_api_key,
                 ai_model=args.ai_model,
+                include_areas=bool(args.include_areas),
                 ocr_python=args.ocr_python,
                 retry_incomplete=bool(args.retry_incomplete),
                 limit=args.limit,

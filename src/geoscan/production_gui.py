@@ -33,6 +33,7 @@ from geoscan.batch_runner import (
 from geoscan.production_program import (
     ProgramConfig,
     RunCancelledError,
+    default_area_target_file,
     default_line_target_file,
     default_text_target_file,
     derive_map_id_from_filename,
@@ -104,10 +105,12 @@ class GuiFormState:
     text_candidates: Path | None = None
     target_line_file: str | None = None
     target_text_file: str | None = None
+    target_area_file: str | None = None
     ai_provider: str = "none"
     ai_base_url: str = ""
     ai_api_key: str = ""
     ai_model: str = ""
+    include_areas: bool = False
     conversion_mode: str = "cli"
     line_engine: str = DEFAULT_LINE_ENGINE
     line_repair: str = DEFAULT_LINE_REPAIR
@@ -140,6 +143,7 @@ def build_program_config_from_gui(state: GuiFormState) -> ProgramConfig:
     text_candidates = state.text_candidates if state.text_candidates and str(state.text_candidates).strip() else None
     target_line_file = state.target_line_file or default_line_target_file(state.map_id)
     target_text_file = state.target_text_file or default_text_target_file(state.map_id)
+    target_area_file = state.target_area_file or default_area_target_file(state.map_id)
     return ProgramConfig(
         project_root=state.project_root,
         source_raster=state.source_raster,
@@ -148,10 +152,12 @@ def build_program_config_from_gui(state: GuiFormState) -> ProgramConfig:
         text_candidates=text_candidates,
         target_line_file=target_line_file,
         target_text_file=target_text_file,
+        target_area_file=target_area_file,
         ai_provider=state.ai_provider,
         ai_base_url=state.ai_base_url,
         ai_api_key=state.ai_api_key,
         ai_model=state.ai_model,
+        include_areas=state.include_areas,
         conversion_mode=state.conversion_mode,
         line_engine=state.line_engine,
         line_repair=state.line_repair,
@@ -185,6 +191,7 @@ def build_batch_config_from_gui(
         ai_base_url=state.ai_base_url,
         ai_api_key=state.ai_api_key,
         ai_model=state.ai_model,
+        include_areas=state.include_areas,
         ocr_python=state.ocr_python,
         retry_incomplete=retry_incomplete,
         limit=limit,
@@ -300,6 +307,24 @@ def completion_message_for_report(report: dict[str, Any]) -> tuple[str, str]:
         if isinstance(dxf_export, dict) and dxf_export.get("path"):
             lines.append(f"文字 DXF: {dxf_export['path']}")
 
+    area_candidates = report.get("area_candidate_generation")
+    if isinstance(area_candidates, dict):
+        count = area_candidates.get("feature_count")
+        path = area_candidates.get("output_geojson")
+        if count is not None:
+            lines.append(f"区候选: {count} 个")
+        if path:
+            lines.append(f"区候选 GeoJSON: {path}")
+
+    area_report = report.get("area")
+    if isinstance(area_report, dict):
+        output_area_count = area_report.get("output_area_count")
+        if output_area_count is not None:
+            lines.append(f"区交换候选: {output_area_count} 个")
+        shp_export = area_report.get("shp_export")
+        if isinstance(shp_export, dict) and shp_export.get("path"):
+            lines.append(f"区 Shapefile: {shp_export['path']}")
+
     conversion = report.get("conversion")
     if not isinstance(conversion, dict):
         lines.append("转换状态: 未返回转换报告。未生成 WT/WL。")
@@ -369,6 +394,7 @@ class ProductionGui(tk.Tk):
         self.text_candidates_var = tk.StringVar()
         self.target_line_file_var = tk.StringVar()
         self.target_text_file_var = tk.StringVar()
+        self.target_area_file_var = tk.StringVar()
         self.ai_provider_var = tk.StringVar(
             value=self._machine_settings.get("ai_provider", "") or DEFAULT_AI_PROVIDER
         )
@@ -412,6 +438,7 @@ class ProductionGui(tk.Tk):
         )
         self.settings_file_var = tk.StringVar(value=str(settings_save_path()))
         self.export_dxf_var = tk.BooleanVar(value=True)
+        self.include_areas_var = tk.BooleanVar(value=False)
         self.reset_output_var = tk.BooleanVar(value=False)
         self.timeout_var = tk.StringVar(value="300")
         self.batch_source_dir_var = tk.StringVar()
@@ -664,62 +691,71 @@ class ProductionGui(tk.Tk):
         ttk.Label(parent, text="目标文字文件 WT").grid(row=2, column=0, sticky="w", pady=4)
         ttk.Entry(parent, textvariable=self.target_text_file_var).grid(row=2, column=1, sticky="ew", pady=4)
 
-        ttk.Label(parent, text="线提取引擎").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Label(parent, text="目标区文件 WP").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Entry(parent, textvariable=self.target_area_file_var).grid(row=3, column=1, sticky="ew", pady=4)
+
+        ttk.Checkbutton(
+            parent,
+            text="生成区候选（可选，输出 Shapefile；仍需人工复核）",
+            variable=self.include_areas_var,
+        ).grid(row=4, column=1, columnspan=2, sticky="w", pady=4)
+
+        ttk.Label(parent, text="线提取引擎").grid(row=5, column=0, sticky="w", pady=4)
         ttk.Combobox(
             parent,
             textvariable=self.line_engine_var,
             values=("hough", "trace"),
             state="readonly",
             width=18,
-        ).grid(row=3, column=1, sticky="w", pady=4)
+        ).grid(row=5, column=1, sticky="w", pady=4)
         ttk.Label(
             parent,
             text="trace=手工修改优先；hough=快速直线旧模式",
             foreground="#555555",
-        ).grid(row=3, column=2, sticky="w", pady=4)
+        ).grid(row=5, column=2, sticky="w", pady=4)
 
-        ttk.Label(parent, text="线修复").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Label(parent, text="线修复").grid(row=6, column=0, sticky="w", pady=4)
         ttk.Combobox(
             parent,
             textvariable=self.line_repair_var,
             values=("off", "conservative"),
             state="readonly",
             width=18,
-        ).grid(row=4, column=1, sticky="w", pady=4)
+        ).grid(row=6, column=1, sticky="w", pady=4)
 
-        ttk.Label(parent, text="导出线层").grid(row=5, column=0, sticky="w", pady=4)
+        ttk.Label(parent, text="导出线层").grid(row=7, column=0, sticky="w", pady=4)
         ttk.Combobox(
             parent,
             textvariable=self.line_export_source_var,
             values=("raw", "repaired", "ai_enhanced"),
             state="readonly",
             width=18,
-        ).grid(row=5, column=1, sticky="w", pady=4)
+        ).grid(row=7, column=1, sticky="w", pady=4)
         ttk.Label(
             parent,
             text="repaired 需开启线修复；ai_enhanced 需同时在 AI 页启用 AI 增强",
             foreground="#555555",
-        ).grid(row=5, column=2, sticky="w", pady=4)
+        ).grid(row=7, column=2, sticky="w", pady=4)
 
         # 输入调平 / 增强底图 已移到主界面（更常用、更好找），不再放在此高级弹窗。
 
-        ttk.Label(parent, text="转换等待秒数").grid(row=7, column=0, sticky="w", pady=4)
-        ttk.Entry(parent, textvariable=self.timeout_var, width=12).grid(row=7, column=1, sticky="w", pady=4)
+        ttk.Label(parent, text="转换等待秒数").grid(row=9, column=0, sticky="w", pady=4)
+        ttk.Entry(parent, textvariable=self.timeout_var, width=12).grid(row=9, column=1, sticky="w", pady=4)
 
-        ttk.Checkbutton(parent, text="导出 DXF", variable=self.export_dxf_var).grid(row=8, column=1, sticky="w", pady=4)
+        ttk.Checkbutton(parent, text="导出 DXF/SHP", variable=self.export_dxf_var).grid(row=10, column=1, sticky="w", pady=4)
 
-        ttk.Label(parent, text="文字候选 GeoJSON（高级，可选）").grid(row=10, column=0, sticky="w", pady=4)
+        ttk.Label(parent, text="文字候选 GeoJSON（高级，可选）").grid(row=12, column=0, sticky="w", pady=4)
         ttk.Entry(parent, textvariable=self.text_candidates_var).grid(
-            row=10, column=1, sticky="ew", pady=4, padx=(8, 8)
+            row=12, column=1, sticky="ew", pady=4, padx=(8, 8)
         )
         ttk.Button(parent, text="选择", command=self._choose_text_candidates).grid(
-            row=10, column=2, sticky="w", pady=4
+            row=12, column=2, sticky="w", pady=4
         )
         ttk.Label(
             parent,
             text="留空=自动生成（正常用法）。只有要用人工整理过的文字层时才选择；不要选旧运行的输出。",
             style="Hint.TLabel",
-        ).grid(row=11, column=1, columnspan=2, sticky="w")
+        ).grid(row=13, column=1, columnspan=2, sticky="w")
 
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
@@ -1274,6 +1310,8 @@ class ProductionGui(tk.Tk):
             self.target_line_file_var.set(default_line_target_file(self.map_id_var.get().strip()))
         if not self.target_text_file_var.get().strip() and self.map_id_var.get().strip():
             self.target_text_file_var.set(default_text_target_file(self.map_id_var.get().strip()))
+        if not self.target_area_file_var.get().strip() and self.map_id_var.get().strip():
+            self.target_area_file_var.set(default_area_target_file(self.map_id_var.get().strip()))
 
     def _form_state(self) -> GuiFormState:
         wait_timeout = int(self.timeout_var.get().strip() or "300")
@@ -1286,10 +1324,12 @@ class ProductionGui(tk.Tk):
             text_candidates=Path(text_path) if text_path else None,
             target_line_file=self.target_line_file_var.get().strip() or None,
             target_text_file=self.target_text_file_var.get().strip() or None,
+            target_area_file=self.target_area_file_var.get().strip() or None,
             ai_provider=self.ai_provider_var.get().strip() or "none",
             ai_base_url=self.ai_base_url_var.get().strip(),
             ai_api_key=self.ai_api_key_var.get().strip(),
             ai_model=self.ai_model_var.get().strip(),
+            include_areas=self.include_areas_var.get(),
             conversion_mode=self.conversion_mode_var.get().strip(),
             line_engine=self.line_engine_var.get().strip() or "hough",
             line_repair=self.line_repair_var.get().strip() or "off",
