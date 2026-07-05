@@ -42,7 +42,24 @@ from geoscan.production_program import (
 )
 
 
-DEFAULT_PROJECT_ROOT = Path.cwd()
+def _writable_default_root() -> Path:
+    """A user-writable base for outputs, decoupled from where the app is installed.
+
+    A frozen app's working directory is its install dir (e.g. Program Files),
+    which is read-only without admin — defaulting outputs there fails with a
+    PermissionError. Prefer the user's Documents, then their home folder. In dev
+    (not frozen) the repo cwd is fine.
+    """
+    if getattr(sys, "frozen", False):
+        home = Path.home()
+        for candidate in (home / "Documents" / "GeoScan", home / "GeoScan"):
+            if candidate.parent.is_dir():
+                return candidate
+        return home / "GeoScan"
+    return Path.cwd()
+
+
+DEFAULT_PROJECT_ROOT = _writable_default_root()
 IMAGE_EXTENSIONS = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".bmp")
 
 
@@ -56,16 +73,19 @@ def _app_icon_path() -> Path | None:
 
 
 def default_project_root(machine_settings: dict[str, str] | None = None) -> Path:
-    """Working directory for this machine: saved setting > dev default > exe/cwd."""
+    """Working directory for this machine: saved setting > writable user default.
+
+    Never the install dir — an app under Program Files is read-only, so outputs
+    must default somewhere the user can write. The user can always pick their own
+    folder, and choosing an input image points this at the image's folder.
+    """
     settings = machine_settings if machine_settings is not None else {}
     saved = settings.get("project_root", "").strip()
     if saved and Path(saved).is_dir():
         return Path(saved)
     if DEFAULT_PROJECT_ROOT.is_dir():
         return DEFAULT_PROJECT_ROOT
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path.cwd()
+    return _writable_default_root()
 AI_CONNECTION_TIMEOUT_SECONDS = 30
 DEFAULT_AI_PROVIDER = "none"
 DEFAULT_AI_BASE_URL = "https://api.siliconflow.cn/v1/chat/completions"
@@ -333,8 +353,8 @@ class ProductionGui(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("GeoScan")
-        self.geometry("1000x780")
-        self.minsize(880, 680)
+        self.geometry("1300x880")
+        self.minsize(1120, 780)
         self._setup_style()
         self._messages: queue.Queue[tuple[str, str]] = queue.Queue()
 
@@ -1172,13 +1192,14 @@ class ProductionGui(tk.Tk):
             map_id = default_map_id_from_image(Path(path))
             if map_id and not self.map_id_var.get().strip():
                 self.map_id_var.set(map_id)
-            # On a machine where the current working directory does not exist
-            # (e.g. first launch on a colleague's PC), follow the chosen image.
-            if not current_root or not Path(current_root).is_dir():
-                image_dir = str(Path(path).resolve().parent)
-                self.project_root_var.set(image_dir)
-                self.output_parent_var.set(image_dir)
-                self._log(f"工作目录自动设为图片所在文件夹: {image_dir}")
+            # Point the working + output folders at the image's own folder (the
+            # user's data workspace). This keeps outputs next to the data and,
+            # crucially, out of the read-only install dir. The user can still
+            # override either folder with its 选择 button afterwards.
+            image_dir = str(Path(path).resolve().parent)
+            self.project_root_var.set(image_dir)
+            self.output_parent_var.set(image_dir)
+            self._log(f"工作目录/输出目录已跟随图片文件夹: {image_dir}")
 
     def _choose_output_parent(self) -> None:
         folder = filedialog.askdirectory(initialdir=self.output_parent_var.get() or str(DEFAULT_PROJECT_ROOT))

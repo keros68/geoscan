@@ -56,8 +56,9 @@ MAPGIS_LOAD_READY  ——  单一交付文件夹：像素底图 + .WL/.WT + 线/
 ### 普通用户（Windows 安装包）
 
 到 [**Releases**](https://github.com/keros68/geoscan/releases/latest) 页下载最新的
-`MapGISVectorizeSetup.exe` 运行。程序装到 `C:\Program Files\MapGISVectorize\`，
-你的设置存在 `%LOCALAPPDATA%\MapGISVectorize\config\`，升级/卸载都不动它。
+`GeoScanSetup.exe` 运行。安装**无需管理员权限**，默认装到当前用户目录
+（`%LOCALAPPDATA%\Programs\GeoScan`），也可在安装向导里自选任意可写文件夹——
+装到哪里不受限制。你的设置存在 `%LOCALAPPDATA%\GeoScan\config\`，升级/卸载都不动它。
 
 打开程序 → **设置** 页 → **检查更新**：有新版会自动下载安装包、校验后就地覆盖，
 你的工具路径和 API Key 都保留。
@@ -115,6 +116,6 @@ scan data, standards, symbol libraries, or run outputs.
 - **GUI + batch runner**, and **in-app auto-update** from GitHub Releases
   (Settings → 检查更新).
 
-Windows users: download `MapGISVectorizeSetup.exe` from
+Windows users: download `GeoScanSetup.exe` from
 [Releases](https://github.com/keros68/geoscan/releases/latest). Developers:
 `pip install -e ".[dev,ocr,gui]"` then `pytest`. License: MIT.

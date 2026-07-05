@@ -11,7 +11,7 @@
 
 #define AppName "GeoScan"
 ; Keep this in step with src/geoscan/__init__.py __version__ and the release tag.
-#define AppVersion "0.1.0"
+#define AppVersion "0.1.1"
 #define AppExe "GeoScan.exe"
 ; dist folder relative to this .iss (release\installer\ -> repo\dist\...)
 #define DistDir "..\..\dist\GeoScan"
@@ -30,7 +30,11 @@ Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
-PrivilegesRequired=admin
+; Per-user install: no admin prompt, lands in a user-writable location
+; ({localappdata}\Programs\GeoScan by default). The wizard's dir page stays on,
+; so the user can still browse to any folder they can write to.
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
 WizardStyle=modern
 ; SetupIconFile=..\..\packaging\app_icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
