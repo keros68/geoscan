@@ -255,7 +255,7 @@ def test_apply_engine_update_overwrites_live_package(monkeypatch, tmp_path):
     live = tmp_path / "engine"
     (live / "geoscan").mkdir(parents=True)
     (live / "geoscan" / "__init__.py").write_text("__version__ = 'old'", encoding="utf-8")
-    (live / "geoscan" / "keep.py").write_text("untouched", encoding="utf-8")
+    (live / "geoscan" / "removed_upstream.py").write_text("stale", encoding="utf-8")
     staging = tmp_path / "staging"
     (staging / "geoscan").mkdir(parents=True)
     (staging / "geoscan" / "__init__.py").write_text("__version__ = 'new'", encoding="utf-8")
@@ -264,7 +264,34 @@ def test_apply_engine_update_overwrites_live_package(monkeypatch, tmp_path):
     updater.apply_engine_update(staging)
 
     assert "new" in (live / "geoscan" / "__init__.py").read_text(encoding="utf-8")
-    assert (live / "geoscan" / "keep.py").exists()  # pre-existing files remain
+    # The zip is the FULL public package: anything it does not ship is stale
+    # and must not survive the update (it could shadow current code).
+    assert not (live / "geoscan" / "removed_upstream.py").exists()
+
+
+def test_apply_engine_update_sweeps_stale_subdirs_and_bytecode(monkeypatch, tmp_path):
+    live = tmp_path / "engine"
+    pkg = live / "geoscan"
+    (pkg / "__pycache__").mkdir(parents=True)
+    (pkg / "__pycache__" / "old.cpython-312.pyc").write_bytes(b"\x00")
+    (pkg / "section_bootstrap").mkdir()
+    (pkg / "section_bootstrap" / "SECTION_BOOTSTRAP.WT").write_bytes(b"old")
+    (pkg / "old_dir").mkdir()
+    (pkg / "old_dir" / "gone.py").write_text("stale", encoding="utf-8")
+    (pkg / "__init__.py").write_text("__version__ = 'old'", encoding="utf-8")
+
+    staging = tmp_path / "staging"
+    (staging / "geoscan" / "section_bootstrap").mkdir(parents=True)
+    (staging / "geoscan" / "__init__.py").write_text("__version__ = 'new'", encoding="utf-8")
+    (staging / "geoscan" / "section_bootstrap" / "SECTION_BOOTSTRAP.WT").write_bytes(b"new")
+
+    monkeypatch.setattr(updater, "engine_dir", lambda: live)
+    updater.apply_engine_update(staging)
+
+    # Shipped subdir content is refreshed; stale dir + bytecode are gone.
+    assert (pkg / "section_bootstrap" / "SECTION_BOOTSTRAP.WT").read_bytes() == b"new"
+    assert not (pkg / "old_dir").exists()
+    assert not (pkg / "__pycache__").exists()
 
 
 def test_download_engine_extracts_geoscan(monkeypatch, tmp_path):

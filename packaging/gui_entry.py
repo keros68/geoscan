@@ -69,6 +69,19 @@ def main() -> int:
         from geoscan.app_settings import bootstrap_settings
         from geoscan.production_gui import ProductionGui
 
+        # Exercise the compiled cv2 extension for real. A broken bundle (or a
+        # stale cv2/ left over from an older install) can still satisfy
+        # `import cv2` — as an empty namespace package or a mismatched wrapper
+        # — so an actual conversion call is the only trustworthy probe. This
+        # runs both as the build smoke test and as the installer's post-install
+        # self-check.
+        import numpy as _np
+        import cv2 as _cv2
+
+        _gray = _cv2.cvtColor(_np.zeros((4, 4, 3), dtype=_np.uint8), _cv2.COLOR_BGR2GRAY)
+        if _gray.shape != (4, 4):
+            raise RuntimeError("cv2 self-check returned wrong shape")
+
         bootstrap_settings()
         app = ProductionGui()
         app.destroy()

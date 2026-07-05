@@ -50,6 +50,16 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务:"
 
+[InstallDelete]
+; Wipe the previous runtime layer BEFORE copying the new one. An overwrite
+; install otherwise leaves orphaned files from older builds inside _internal\
+; (e.g. an old loose cv2\__init__.py shadowing the new cv2 extension module ->
+; "No module named 'numpy.core.multiarray'" crash on startup). _internal and
+; gdal are fully owned by the installer, so deleting them is always safe; the
+; user's config lives in %LOCALAPPDATA%\GeoScan and is untouched.
+Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\gdal"
+
 [Files]
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 

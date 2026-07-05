@@ -124,6 +124,11 @@ a = Analysis(
         *[m for m in collect_submodules("geoscan") if _is_public(m)],
         "PIL._tkinter_finder",
         "sv_ttk",
+        # numpy 2.x compat shims: cv2's wrapper does `import numpy.core.multiarray`
+        # at runtime, invisible to static analysis when cv2 ships as loose source.
+        # Missing them -> "No module named 'numpy.core.multiarray'" in the frozen app.
+        "numpy.core.multiarray",
+        "numpy.core.umath",
         *rapidocr_hidden,
         *ort_hidden,
         *svttk_hidden,

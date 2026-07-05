@@ -24,6 +24,7 @@ works inside the frozen build with no extra wheels.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -373,10 +374,17 @@ def download_engine(
 
 
 def apply_engine_update(staging: Path) -> None:
-    """Overwrite the live engine's ``geoscan/`` with the staged copy.
+    """Replace the live engine's ``geoscan/`` with the staged copy.
 
     Loose .py files are not locked on Windows once imported, so we overwrite in
-    place; stale bytecode is dropped so the fresh sources win on next start.
+    place. The engine zip carries the FULL public package, so afterwards
+    anything in the live package that the staged copy does not ship (a module
+    removed upstream, old bytecode) is stale and gets swept — leftovers would
+    otherwise survive updates forever and can shadow current code. Copy first,
+    sweep second: the package stays complete at every moment, so a crash
+    mid-update never leaves a missing-module engine. A stale file that cannot
+    be deleted is skipped rather than failing the whole update (no worse than
+    the old overwrite-only behavior).
     """
     live = engine_dir()
     if live is None:
@@ -386,16 +394,25 @@ def apply_engine_update(staging: Path) -> None:
     if not src_pkg.is_dir():
         raise UpdateError("引擎包缺少 geoscan/。")
     try:
+        shipped: set[Path] = set()
         for root, _dirs, files in os.walk(src_pkg):
             rel = Path(root).relative_to(src_pkg)
             target_dir = dst_pkg / rel
             target_dir.mkdir(parents=True, exist_ok=True)
             for name in files:
                 shutil.copy2(Path(root) / name, target_dir / name)
-        for pycache in dst_pkg.rglob("__pycache__"):
-            shutil.rmtree(pycache, ignore_errors=True)
+                shipped.add(rel / name)
     except OSError as exc:
         raise UpdateError(f"应用引擎更新失败：{exc}") from exc
+    for root, _dirs, files in os.walk(dst_pkg, topdown=False):
+        rel = Path(root).relative_to(dst_pkg)
+        for name in files:
+            if rel / name not in shipped:
+                with contextlib.suppress(OSError):
+                    (Path(root) / name).unlink()
+        if rel != Path(".") and not os.listdir(root):
+            with contextlib.suppress(OSError):
+                os.rmdir(root)
 
 
 def apply_engine_update_and_restart(staging: Path) -> None:

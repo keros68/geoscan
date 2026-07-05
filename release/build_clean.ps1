@@ -56,6 +56,20 @@ Section "Installing runtime dependencies (clean set)"
 Section "Dropping non-headless opencv (rapidocr only needs cv2)"
 & $venvPython -m pip uninstall -y opencv-python 2>$null | Out-Null
 
+# Both opencv wheels install into the SAME cv2/ package dir, so the uninstall
+# above also deletes the files the headless wheel owns (cv2.pyd, __init__.py,
+# ...), leaving a gutted cv2 that PyInstaller then collects as data-only —
+# `import cv2` still "works" (empty namespace package) but every real call
+# fails. The v0.1.9 installer shipped without cv2.pyd exactly this way.
+# Force-reinstall headless to restore its files, then PROVE cv2 works.
+Section "Restoring opencv-python-headless (shared cv2/ dir uninstall damage)"
+$cvPin = (Get-Content (Join-Path $PSScriptRoot "requirements-runtime.txt") |
+    Select-String "^opencv-python-headless==").Line.Trim()
+if (-not $cvPin) { throw "opencv-python-headless pin not found in requirements-runtime.txt" }
+& $venvPython -m pip install --force-reinstall --no-deps $cvPin
+& $venvPython -c "import cv2, numpy; v = cv2.cvtColor(numpy.zeros((4,4,3), dtype=numpy.uint8), cv2.COLOR_BGR2GRAY); print('cv2', cv2.__version__, '+ numpy', numpy.__version__, 'OK')"
+if ($LASTEXITCODE -ne 0) { throw "cv2 is broken in the build venv - aborting before PyInstaller collects a gutted bundle" }
+
 # 3. Guardrail: fail loudly if bloat leaked back in -------------------------
 Section "Verifying no known bloat libs are installed"
 $installed = & $venvPython -m pip list --format=freeze
@@ -112,8 +126,14 @@ Get-ChildItem $distDir | ForEach-Object {
 } | Sort-Object MB -Descending | Select-Object -First 8 | Format-Table -AutoSize
 
 # 8. Smoke test -------------------------------------------------------------
+# GeoScan.exe is a GUI-subsystem binary: `&` does NOT wait for it, so the old
+# form reported success no matter what --check did. Start-Process -Wait blocks
+# until it exits and surfaces the real exit code. (On a crash the PyInstaller
+# error dialog holds the process open — close it to let the build fail.)
 Section "Smoke test (--check)"
-& (Join-Path $distDir "GeoScan.exe") --check
+$smoke = Start-Process -FilePath (Join-Path $distDir "GeoScan.exe") -ArgumentList "--check" -Wait -PassThru
+if ($smoke.ExitCode -ne 0) { throw "--check smoke test failed (exit $($smoke.ExitCode))" }
+Write-Host "--check passed" -ForegroundColor Green
 Write-Host "`nBuild finished: $distDir" -ForegroundColor Green
 if ($TrimGdal) {
     Write-Warning "GDAL was trimmed. RUN A REAL DXF EXPORT (line + text) before shipping to confirm no driver DLL is missing."
