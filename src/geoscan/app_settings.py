@@ -38,7 +38,10 @@ SETTINGS_ENV_KEYS: dict[str, str] = {
 
 # Persisted for the GUI only; never exported to env. AI settings cover the
 # provider/url/model ONLY — the API key is pasted per session and never saved.
-GUI_ONLY_KEYS = ("project_root", "ai_provider", "ai_base_url", "ai_model", "ai_enhance")
+GUI_ONLY_KEYS = (
+    "project_root", "ai_provider", "ai_base_url", "ai_model", "ai_enhance",
+    "auto_check_updates",
+)
 
 FORBIDDEN_KEY_FRAGMENTS = ("api_key", "apikey", "token", "secret")
 

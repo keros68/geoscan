@@ -441,6 +441,9 @@ class ProductionGui(tk.Tk):
         self.settings_file_var = tk.StringVar(value=str(settings_save_path()))
         self.export_dxf_var = tk.BooleanVar(value=True)
         self.include_areas_var = tk.BooleanVar(value=False)
+        self.auto_check_updates_var = tk.BooleanVar(
+            value=self._machine_settings.get("auto_check_updates", "1") != "0"
+        )
         self.reset_output_var = tk.BooleanVar(value=False)
         self.timeout_var = tk.StringVar(value="300")
         self.batch_source_dir_var = tk.StringVar()
@@ -459,8 +462,9 @@ class ProductionGui(tk.Tk):
         self.after(300, self._drain_batch_rows)
         self.after(400, self._warn_non_ascii_install_path)
         # Auto-check for updates shortly after startup (silent unless a newer
-        # version exists). Frozen/installed app only — dev runs skip it.
-        if getattr(sys, "frozen", False):
+        # version exists). Frozen/installed app only, and only when the user has
+        # left the "启动时自动检查更新" setting on (default on).
+        if getattr(sys, "frozen", False) and self.auto_check_updates_var.get():
             self.after(3000, lambda: self._check_for_update(silent=True))
 
     def _setup_style(self) -> None:
@@ -592,6 +596,17 @@ class ProductionGui(tk.Tk):
             text="额外生成锐化底图，几何与矢量对齐，装它修图更清楚；none=不生成",
             style="Hint.TLabel",
         ).grid(row=1, column=2, sticky="w", pady=2)
+
+        ttk.Checkbutton(
+            options_row,
+            text="造区候选（可选）",
+            variable=self.include_areas_var,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Label(
+            options_row,
+            text="额外从彩色填充区域提取区(面)候选并导出 WP/Shapefile；默认关闭，仍需人工复核",
+            style="Hint.TLabel",
+        ).grid(row=2, column=2, sticky="w", pady=2)
 
         self.notebook = ttk.Notebook(root)
         self.notebook.grid(row=8, column=0, columnspan=3, sticky="nsew", pady=(10, 8))
@@ -837,14 +852,20 @@ class ProductionGui(tk.Tk):
             row=6, column=1, columnspan=2, sticky="ew", pady=4, padx=(8, 0)
         )
 
+        ttk.Checkbutton(
+            parent,
+            text="启动时自动检查更新（发现新版本会提示是否升级；断网或已是最新时不打扰）",
+            variable=self.auto_check_updates_var,
+        ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(10, 0))
+
         ttk.Label(
             parent,
             text="设置文件不保存任何 API Key。OCR 解释器留空时文字候选为占位框，属正常。",
             style="Hint.TLabel",
-        ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ).grid(row=8, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
         button_bar = ttk.Frame(parent)
-        button_bar.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(14, 0))
+        button_bar.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(14, 0))
         button_bar.columnconfigure(0, weight=1)
         from geoscan import __version__ as _app_version
 
@@ -1087,6 +1108,7 @@ class ProductionGui(tk.Tk):
             "ai_base_url": self.ai_base_url_var.get().strip(),
             "ai_model": self.ai_model_var.get().strip(),
             "ai_enhance": "true" if self.ai_enhance_var.get() else "",
+            "auto_check_updates": "1" if self.auto_check_updates_var.get() else "0",
         }
 
     def _save_machine_settings(self) -> None:
