@@ -39,6 +39,19 @@ class TraceConfig:
     straight_max_deviation: float = 2.5
     min_trace_length: float = 60.0
     min_bbox_diagonal: float = 40.0
+    # Morphological-close kernel diameter applied to the ink mask before
+    # shelling/thinning; repairs small scan breaks (a k-px kernel closes gaps
+    # up to ~k-1 px). 0 keeps the historical no-closing behavior.
+    close_kernel_px: int = 0
+
+
+def close_small_breaks(mask: np.ndarray, *, kernel_px: int) -> np.ndarray:
+    """MORPH_CLOSE the ink mask so hairline scan breaks don't split traces."""
+    if kernel_px <= 1:
+        return mask
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_px, kernel_px))
+    closed = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+    return closed > 0
 
 
 def binarize_dark_ink(rgb: np.ndarray, *, gray_threshold: int = 190) -> np.ndarray:
@@ -247,6 +260,7 @@ def extract_traced_line_candidates(
     config = config or TraceConfig()
     height = rgb.shape[0]
     ink = binarize_dark_ink(rgb, gray_threshold=config.gray_threshold)
+    ink = close_small_breaks(ink, kernel_px=config.close_kernel_px)
     shell = shell_thick_regions(ink, max_stroke_halfwidth=config.max_stroke_halfwidth)
     max_iterations = int(math.ceil(config.max_stroke_halfwidth)) + 8
     skeleton = zhang_suen_thin(shell, max_iterations=max_iterations)

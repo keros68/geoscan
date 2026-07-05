@@ -32,6 +32,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from .line_connectivity import dark_coverage_px
 from .ai_vision_review import (
     AiVisionConfig,
     UrlopenCallable,
@@ -99,23 +100,14 @@ def _endpoint(feature: dict[str, Any], which: str) -> tuple[float, float] | None
 def _dark_coverage(
     gray: np.ndarray, a: tuple[float, float], b: tuple[float, float], thresholds: AiEnhanceThresholds
 ) -> float:
-    """Fraction of sample points along a->b whose neighborhood has map ink."""
-    height, width = gray.shape[:2]
-    gap = math.hypot(b[0] - a[0], b[1] - a[1])
-    samples = max(int(round(gap)), 8)
-    window = thresholds.sample_window_px
-    hits = 0
-    for index in range(samples + 1):
-        t = index / samples
-        x = int(round(a[0] + (b[0] - a[0]) * t))
-        y = int(round(a[1] + (b[1] - a[1]) * t))
-        x0, x1 = max(0, x - window), min(width, x + window + 1)
-        y0, y1 = max(0, y - window), min(height, y + window + 1)
-        if x0 >= x1 or y0 >= y1:
-            continue
-        if int(gray[y0:y1, x0:x1].min()) <= thresholds.dark_threshold:
-            hits += 1
-    return hits / (samples + 1)
+    """Fraction of sample points along a->b (PIXEL coords) with map ink."""
+    return dark_coverage_px(
+        gray,
+        a,
+        b,
+        dark_threshold=thresholds.dark_threshold,
+        window=thresholds.sample_window_px,
+    )
 
 
 def validate_bridge_op(
@@ -153,7 +145,13 @@ def validate_bridge_op(
         return {**base, "accepted": False, "rejected_because": "zero_gap"}
     if gap > thresholds.max_gap_px:
         return {**base, "accepted": False, "rejected_because": "gap_too_large", "gap_px": round(gap, 2)}
-    coverage = _dark_coverage(gray, point_a, point_b, thresholds)
+    # Candidate geometry is in map coordinates (y flipped: map_y = height -
+    # y_px); the raster must be sampled in pixel rows or the evidence check
+    # reads a vertically mirrored location.
+    height = float(gray.shape[0])
+    pixel_a = (point_a[0], height - point_a[1])
+    pixel_b = (point_b[0], height - point_b[1])
+    coverage = _dark_coverage(gray, pixel_a, pixel_b, thresholds)
     if coverage < thresholds.min_dark_coverage:
         return {
             **base,

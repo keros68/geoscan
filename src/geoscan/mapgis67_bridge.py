@@ -27,6 +27,15 @@ SECTION_OPEN_FILE_MENU_PATHS = (
 SECTION_DXF_MENU_PATH = ("1辅助工具", "打开外部数据", "批量转换dxf")
 W60_DXF_MENU_PATH = ("输入", "成批转换DXF")
 W60_DXF_MENU_COMMAND_ID = 4056
+# Optional WP area route: load the Shapefile exchange package, then save it
+# out as a MapGIS .WP (the same two steps MANUAL_W60_STEPS.md describes).
+W60_LOAD_SHAPE_MENU_PATH = ("输入", "装入SHAPE文件")
+W60_SAVE_WP_MENU_PATH = ("文件", "换名存区")
+# Command IDs observed in the real W60_Conv menu tree (automation
+# diagnostics dump); used as fallback when caption matching fails.
+W60_LOAD_SHAPE_COMMAND_ID = 32801
+W60_SAVE_WP_COMMAND_ID = 4019
+W60_SHAPE_LOAD_SETTLE_SECONDS = 4
 SECTION_STARTUP_SETTLE_SECONDS = 5
 SECTION_BATCH_CONVERT_PRECONDITION = (
     "SECTION must open or load any MapGIS file before the DXF batch-conversion menu is visible. "
@@ -507,6 +516,224 @@ def w60_batch_convert(
         )
     _finalize_convert_report(report, batch_dir / "w60_batch_convert_report.json")
     return report
+
+
+def _run_w60_shape_to_wp_automation(
+    *,
+    w60_conv_exe: Path,
+    shp_path: Path,
+    target_wp: Path,
+) -> dict[str, Any]:
+    process = subprocess.Popen([str(w60_conv_exe)], cwd=str(w60_conv_exe.parent))
+    startup_warning = _dismiss_w60_startup_warning(process.pid, timeout_seconds=8)
+    hwnd = _wait_for_w60_main_window(process.pid, timeout_seconds=30)
+    time.sleep(1)
+    _activate_section_window(hwnd)
+
+    def _menu_step(
+        menu_path: Sequence[str],
+        command_name: str,
+        fallback_command_id: int,
+    ) -> tuple[int, dict[str, Any]]:
+        try:
+            item_id = _find_menu_item_id(hwnd, menu_path)
+        except Exception:
+            # Same pattern as the proven DXF flow: W60 menu captions carry
+            # accelerator prefixes; the fixed resource command id still works.
+            item_id = fallback_command_id
+        return item_id, _trigger_menu_command(hwnd, item_id, command_name=command_name)
+
+    def _dialog_step(path_text: str, stage: str, failure_message: str) -> int:
+        try:
+            dialog_hwnd = _wait_for_process_dialog(
+                process.pid, hwnd, timeout_seconds=20, failure_message=failure_message
+            )
+            _set_dialog_text_with_clipboard_and_enter(dialog_hwnd, path_text)
+        except Exception as exc:
+            raise SectionAutomationError(
+                stage=stage,
+                message=str(exc),
+                diagnostics=_collect_w60_window_diagnostics(
+                    process.pid, hwnd, stage=stage, extra={"dialog_path": path_text}
+                ),
+            ) from exc
+        return dialog_hwnd
+
+    load_id, load_trigger = _menu_step(
+        W60_LOAD_SHAPE_MENU_PATH, "w60_load_shape", W60_LOAD_SHAPE_COMMAND_ID
+    )
+    _dialog_step(
+        str(shp_path),
+        "w60_load_shape_dialog_failed",
+        "W60 load-SHAPE file dialog did not appear",
+    )
+    # Give W60 time to import the shapefile before the save menu is used.
+    time.sleep(W60_SHAPE_LOAD_SETTLE_SECONDS)
+    _activate_section_window(hwnd)
+    save_id, save_trigger = _menu_step(
+        W60_SAVE_WP_MENU_PATH, "w60_save_wp", W60_SAVE_WP_COMMAND_ID
+    )
+    try:
+        first_dialog = _wait_for_process_dialog(
+            process.pid,
+            hwnd,
+            timeout_seconds=20,
+            failure_message="W60 save-WP dialog did not appear",
+        )
+        if _find_dialog_edit_with_retry(first_dialog, timeout_seconds=3) is None:
+            # 换名存区 first shows 选择另存文件 — a pick-which-file listbox
+            # (确定/取消, no filename field). Confirm the preselected entry;
+            # the real save-as filename dialog opens after it.
+            if not _click_dialog_button(first_dialog, ("确定", "OK")):
+                raise RuntimeError("W60 选择另存文件 dialog has no 确定 button")
+            save_dialog = _wait_for_next_process_dialog(
+                process.pid,
+                hwnd,
+                exclude_hwnd=first_dialog,
+                timeout_seconds=20,
+                failure_message="W60 save-as filename dialog did not appear after 确定",
+            )
+        else:
+            save_dialog = first_dialog
+        _set_dialog_text_with_clipboard_and_enter(save_dialog, str(target_wp))
+    except Exception as exc:
+        raise SectionAutomationError(
+            stage="w60_save_wp_dialog_failed",
+            message=str(exc),
+            diagnostics=_collect_w60_window_diagnostics(
+                process.pid,
+                hwnd,
+                stage="w60_save_wp_dialog_failed",
+                extra={"dialog_path": str(target_wp)},
+            ),
+        ) from exc
+    return {
+        "pid": process.pid,
+        "hwnd": hwnd,
+        "window": _window_text(hwnd),
+        "startup_warning": startup_warning,
+        "load_menu_item_id": load_id,
+        "load_menu_trigger": load_trigger,
+        "save_menu_item_id": save_id,
+        "save_menu_trigger": save_trigger,
+    }
+
+
+def w60_shape_to_wp(
+    *,
+    shp_path: Path,
+    target_wp: Path,
+    w60_conv_exe: Path | None = None,
+    dry_run: bool = False,
+    wait_timeout_seconds: int = 120,
+    report_path: Path | None = None,
+) -> dict[str, Any]:
+    """Convert one Shapefile exchange package to a MapGIS .WP via W60_Conv.
+
+    Automates 输入->装入SHAPE文件 then 文件->换名存区 and verifies success
+    deterministically: the target .WP must appear on disk, non-empty, with a
+    stable size. A failed conversion is reported, never claimed. The WP stays
+    review-only (checked=no candidates; manual MapGIS acceptance required).
+    """
+    shp_path = Path(shp_path)
+    target_wp = Path(target_wp)
+    resolved_exe, exe_candidates = _resolve_w60_conv_exe(w60_conv_exe)
+    report: dict[str, Any] = {
+        "action": "w60_shape_to_wp",
+        "ok": False,
+        "status": "not_started",
+        "conversion_started": False,
+        "w60_conv_exe": str(resolved_exe),
+        "w60_conv_exe_exists": resolved_exe.is_file(),
+        "w60_conv_exe_candidates": exe_candidates,
+        "shp_path": str(shp_path),
+        "target_wp": str(target_wp),
+        "load_menu_path": list(W60_LOAD_SHAPE_MENU_PATH),
+        "save_menu_path": list(W60_SAVE_WP_MENU_PATH),
+        "review_only": True,
+        "writes_checked_yes": False,
+    }
+
+    def _finish() -> dict[str, Any]:
+        if report_path is not None:
+            _finalize_convert_report(report, report_path)
+        return report
+
+    if not shp_path.is_file() or shp_path.stat().st_size == 0:
+        report["status"] = "missing_shp"
+        report["manual_recovery"] = (
+            "Run the area exchange package first (--include-areas); a non-empty .shp is required."
+        )
+        return _finish()
+    if dry_run:
+        report["status"] = "dry_run"
+        report["note"] = "Dry run validates inputs only; W60_Conv was not launched and no conversion is claimed."
+        return _finish()
+    if not resolved_exe.is_file():
+        report["status"] = "missing_w60_conv_exe"
+        report["manual_recovery"] = (
+            "Set --w60-conv-exe or MAPGIS67_W60_CONV_EXE to the local W60_Conv.exe path, then retry."
+        )
+        return _finish()
+
+    # A pre-existing target would make the save dialog pop an overwrite
+    # confirmation the automation does not handle; start clean instead.
+    if target_wp.exists():
+        target_wp.unlink()
+    target_wp.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        automation = _run_w60_shape_to_wp_automation(
+            w60_conv_exe=resolved_exe, shp_path=shp_path, target_wp=target_wp
+        )
+        report["conversion_started"] = True
+        report["automation"] = automation
+    except SectionAutomationError as exc:  # pragma: no cover - depends on W60 GUI state.
+        report["status"] = "automation_failed"
+        report["automation_stage"] = exc.stage
+        report["automation_diagnostics"] = exc.diagnostics
+        report["error"] = f"{type(exc).__name__}: {exc}"
+        report["manual_recovery"] = (
+            "Open W60_Conv.exe manually: 输入 -> 装入SHAPE文件 (select the exchange .shp), "
+            "then 文件 -> 换名存区 (save as the target .WP). Do not claim conversion until the .WP opens in MapGIS."
+        )
+        return _finish()
+    except Exception as exc:  # pragma: no cover - depends on W60 GUI state.
+        report["status"] = "automation_failed"
+        report["automation_stage"] = "unknown"
+        report["error"] = f"{type(exc).__name__}: {exc}"
+        report["manual_recovery"] = (
+            "Open W60_Conv.exe manually: 输入 -> 装入SHAPE文件, then 文件 -> 换名存区 to the target .WP."
+        )
+        return _finish()
+
+    # Deterministic success check: the .WP exists, non-empty, size stable.
+    deadline = time.monotonic() + wait_timeout_seconds
+    last_size = -1
+    stable = False
+    while time.monotonic() < deadline:
+        if target_wp.is_file():
+            size = target_wp.stat().st_size
+            if size > 0 and size == last_size:
+                stable = True
+                break
+            last_size = size
+        time.sleep(2)
+
+    report["ok"] = stable
+    report["status"] = "verified" if stable else "output_verification_failed"
+    report["target_wp_size"] = target_wp.stat().st_size if target_wp.is_file() else 0
+    if stable:
+        _close_process_windows(automation["pid"])
+    else:
+        report["post_wait_window_state"] = _post_wait_window_state(
+            automation.get("pid"), automation.get("hwnd")
+        )
+        report["manual_recovery"] = (
+            "W60 did not write the target .WP in time. Check the W60 window for a pending dialog, "
+            "or run 输入 -> 装入SHAPE文件 / 文件 -> 换名存区 manually."
+        )
+    return _finish()
 
 
 def collect_ready(
@@ -1256,6 +1483,53 @@ def _wait_for_process_dialog(
     raise RuntimeError(failure_message)
 
 
+def _wait_for_next_process_dialog(
+    pid: int,
+    main_hwnd: int,
+    *,
+    exclude_hwnd: int,
+    timeout_seconds: int,
+    failure_message: str,
+) -> int:
+    """Wait for a dialog other than ``exclude_hwnd`` (a follow-up dialog)."""
+    import win32gui
+    import win32process
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        matches: list[int] = []
+
+        def collect(hwnd: int, _extra: object) -> None:
+            if hwnd in (main_hwnd, exclude_hwnd) or not win32gui.IsWindowVisible(hwnd):
+                return
+            _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
+            if window_pid == pid:
+                matches.append(hwnd)
+
+        win32gui.EnumWindows(collect, None)
+        if matches:
+            return matches[0]
+        time.sleep(0.5)
+    raise RuntimeError(failure_message)
+
+
+def _click_dialog_button(dialog_hwnd: int, captions: Sequence[str]) -> bool:
+    """Press a dialog button by caption; True if a button was found."""
+    import win32con
+    import win32gui
+
+    button_hwnd = _find_button(dialog_hwnd, captions)
+    if not button_hwnd:
+        return False
+    button_id = win32gui.GetDlgCtrlID(button_hwnd)
+    win32gui.SendMessage(dialog_hwnd, win32con.WM_COMMAND, button_id, button_hwnd)
+    time.sleep(0.5)
+    if _safe_is_window(dialog_hwnd) and win32gui.IsWindowVisible(dialog_hwnd):
+        win32gui.SendMessage(button_hwnd, win32con.BM_CLICK, 0, 0)
+        time.sleep(0.5)
+    return True
+
+
 def _find_process_dialog(pid: int, main_hwnd: int) -> int | None:
     import win32gui
     import win32process
@@ -1282,7 +1556,12 @@ def _caption_matches(actual: str, expected: str) -> bool:
     expected_norm = _normalize_caption(expected)
     if not actual_norm or not expected_norm:
         return actual_norm == expected_norm
-    return actual_norm.startswith(expected_norm) or expected_norm.startswith(actual_norm)
+    if actual_norm.startswith(expected_norm) or expected_norm.startswith(actual_norm):
+        return True
+    # W60 top-level menus glue the accelerator letter onto the caption
+    # ("&I输入" -> "i输入"), which defeats the prefix checks above; a
+    # containment check recovers those without touching exact submenu names.
+    return len(expected_norm) >= 2 and expected_norm in actual_norm
 
 
 def _find_menu_item_id(hwnd: int, captions: Sequence[str]) -> int:
@@ -1363,12 +1642,34 @@ def _set_dialog_text_and_confirm(dialog_hwnd: int, value: str) -> None:
         win32gui.SendMessage(button_hwnd, win32con.BM_CLICK, 0, 0)
 
 
+def _find_dialog_edit_with_retry(dialog_hwnd: int, *, timeout_seconds: float = 6.0) -> int | None:
+    """Find the filename Edit control, retrying while the dialog builds itself.
+
+    File dialogs (e.g. W60 的 选择另存文件) can be returned by the dialog wait
+    before their child controls exist; some also nest the Edit inside a
+    ComboBox. Poll for a while and check both shapes before giving up.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        edit_hwnd = _find_child_by_class(dialog_hwnd, "Edit")
+        if edit_hwnd:
+            return edit_hwnd
+        combo_hwnd = _find_child_by_class(dialog_hwnd, "ComboBox")
+        if combo_hwnd:
+            edit_hwnd = _find_child_by_class(combo_hwnd, "Edit")
+            if edit_hwnd:
+                return edit_hwnd
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.5)
+
+
 def _set_dialog_text_with_clipboard_and_enter(dialog_hwnd: int, value: str) -> None:
     import win32api
     import win32con
     import win32gui
 
-    edit_hwnd = _find_child_by_class(dialog_hwnd, "Edit")
+    edit_hwnd = _find_dialog_edit_with_retry(dialog_hwnd)
     if not edit_hwnd:
         raise RuntimeError("Could not find an editable file field in W60 dialog")
     _activate_section_window(dialog_hwnd)

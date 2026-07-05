@@ -242,11 +242,15 @@ def _placeholder_feature(
         "text_route": TEXT_PLACEHOLDER_ROUTE,
         "native_wt_ready_for_acceptance": "no",
         "Note": "Text placeholder for manual correction; generated through SECTION/W60 DXF route.",
+        # This route keeps geometry in PIXEL units (1 px = 1 ground unit), so
+        # the label size must be font_mm converted to px (coordinate_scale=1).
+        # Passing PIXEL_TO_ORIGINAL_TIF_MM here cancelled the conversion and
+        # rendered every annotation ~12x too small.
         "OGR_STYLE": mapgis_dxf_label_style(
             text,
             "SimSun",
             font_mm,
-            coordinate_scale=PIXEL_TO_ORIGINAL_TIF_MM,
+            coordinate_scale=1.0,
         ),
     }
     return (

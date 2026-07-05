@@ -92,6 +92,8 @@ DEFAULT_AI_PROVIDER = "none"
 DEFAULT_AI_BASE_URL = "https://api.siliconflow.cn/v1/chat/completions"
 DEFAULT_AI_MODEL = "Qwen/Qwen3-VL-32B-Instruct"
 DEFAULT_LINE_ENGINE = "trace"
+# GUI 默认"标准"连接档：补断线更省人工，且每条桥都要求图上有墨迹证据。
+DEFAULT_LINE_CONNECT = "standard"
 DEFAULT_LINE_REPAIR = "conservative"
 DEFAULT_LINE_EXPORT_SOURCE = "repaired"
 
@@ -113,6 +115,9 @@ class GuiFormState:
     include_areas: bool = False
     conversion_mode: str = "cli"
     line_engine: str = DEFAULT_LINE_ENGINE
+    line_connect: str = DEFAULT_LINE_CONNECT
+    line_bridge_gap_px: float | None = None
+    line_close_gap_px: float | None = None
     line_repair: str = DEFAULT_LINE_REPAIR
     line_export_source: str = DEFAULT_LINE_EXPORT_SOURCE
     ai_enhance: bool = False
@@ -160,6 +165,9 @@ def build_program_config_from_gui(state: GuiFormState) -> ProgramConfig:
         include_areas=state.include_areas,
         conversion_mode=state.conversion_mode,
         line_engine=state.line_engine,
+        line_connect=state.line_connect,
+        line_bridge_gap_px=state.line_bridge_gap_px,
+        line_close_gap_px=state.line_close_gap_px,
         line_repair=state.line_repair,
         line_export_source=state.line_export_source,
         ai_enhance=state.ai_enhance,
@@ -184,6 +192,9 @@ def build_batch_config_from_gui(
         source_rasters=source_rasters,
         conversion_mode=state.conversion_mode,
         line_engine=state.line_engine,
+        line_connect=state.line_connect,
+        line_bridge_gap_px=state.line_bridge_gap_px,
+        line_close_gap_px=state.line_close_gap_px,
         line_repair=state.line_repair,
         line_export_source=state.line_export_source,
         ai_enhance=state.ai_enhance,
@@ -416,6 +427,9 @@ class ProductionGui(tk.Tk):
         self.level_input_var = tk.StringVar(value="off")
         self.enhanced_preview_var = tk.StringVar(value="standard")
         self.line_engine_var = tk.StringVar(value=DEFAULT_LINE_ENGINE)
+        self.line_connect_var = tk.StringVar(value=DEFAULT_LINE_CONNECT)
+        self.line_bridge_gap_var = tk.StringVar(value="")
+        self.line_close_gap_var = tk.StringVar(value="")
         self.line_repair_var = tk.StringVar(value=DEFAULT_LINE_REPAIR)
         self.line_export_source_var = tk.StringVar(value=DEFAULT_LINE_EXPORT_SOURCE)
         self.ocr_python_var = tk.StringVar(
@@ -760,25 +774,59 @@ class ProductionGui(tk.Tk):
             foreground="#555555",
         ).grid(row=7, column=2, sticky="w", pady=4)
 
+        ttk.Label(parent, text="线条连接程度").grid(row=8, column=0, sticky="w", pady=4)
+        ttk.Combobox(
+            parent,
+            textvariable=self.line_connect_var,
+            values=("conservative", "standard", "aggressive"),
+            state="readonly",
+            width=18,
+        ).grid(row=8, column=1, sticky="w", pady=4)
+        ttk.Label(
+            parent,
+            text="standard=标准补断线（默认）；aggressive=更积极；conservative=保守旧行为。补线只在图上有墨迹证据时发生",
+            foreground="#555555",
+        ).grid(row=8, column=2, sticky="w", pady=4)
+
+        ttk.Label(parent, text="桥接最大断口 px").grid(row=9, column=0, sticky="w", pady=4)
+        ttk.Entry(parent, textvariable=self.line_bridge_gap_var, width=12).grid(
+            row=9, column=1, sticky="w", pady=4
+        )
+        ttk.Label(
+            parent,
+            text="断线自动接回的最大距离。留空=按档位（标准60/积极100）；填0=完全不补；调大补得更多（仍要求图上有墨迹才连，不会凭空画线）",
+            foreground="#555555",
+        ).grid(row=9, column=2, sticky="w", pady=4)
+
+        ttk.Label(parent, text="闭合收口最大缺口 px").grid(row=10, column=0, sticky="w", pady=4)
+        ttk.Entry(parent, textvariable=self.line_close_gap_var, width=12).grid(
+            row=10, column=1, sticky="w", pady=4
+        )
+        ttk.Label(
+            parent,
+            text="图例框/圈闭差一个小口就闭合时，自动补上收口段的最大缺口。留空=按档位（标准12/积极20）；填0=不收口；图例框仍缺口就调大",
+            foreground="#555555",
+        ).grid(row=10, column=2, sticky="w", pady=4)
+
         # 输入调平 / 增强底图 已移到主界面（更常用、更好找），不再放在此高级弹窗。
 
-        ttk.Label(parent, text="转换等待秒数").grid(row=9, column=0, sticky="w", pady=4)
-        ttk.Entry(parent, textvariable=self.timeout_var, width=12).grid(row=9, column=1, sticky="w", pady=4)
+        ttk.Label(parent, text="转换等待秒数").grid(row=14, column=0, sticky="w", pady=4)
+        ttk.Entry(parent, textvariable=self.timeout_var, width=12).grid(row=14, column=1, sticky="w", pady=4)
 
-        ttk.Checkbutton(parent, text="导出 DXF/SHP", variable=self.export_dxf_var).grid(row=10, column=1, sticky="w", pady=4)
+        ttk.Checkbutton(parent, text="导出 DXF/SHP", variable=self.export_dxf_var).grid(row=15, column=1, sticky="w", pady=4)
 
-        ttk.Label(parent, text="文字候选 GeoJSON（高级，可选）").grid(row=12, column=0, sticky="w", pady=4)
+        ttk.Label(parent, text="文字候选 GeoJSON（高级，可选）").grid(row=16, column=0, sticky="w", pady=4)
         ttk.Entry(parent, textvariable=self.text_candidates_var).grid(
-            row=12, column=1, sticky="ew", pady=4, padx=(8, 8)
+            row=16, column=1, sticky="ew", pady=4, padx=(8, 8)
         )
         ttk.Button(parent, text="选择", command=self._choose_text_candidates).grid(
-            row=12, column=2, sticky="w", pady=4
+            row=16, column=2, sticky="w", pady=4
         )
         ttk.Label(
             parent,
             text="留空=自动生成（正常用法）。只有要用人工整理过的文字层时才选择；不要选旧运行的输出。",
             style="Hint.TLabel",
-        ).grid(row=13, column=1, columnspan=2, sticky="w")
+        ).grid(row=17, column=1, columnspan=2, sticky="w")
 
     def _scrollable_content(self, tab: ttk.Frame) -> ttk.Frame:
         """Wrap a notebook tab in a vertical scroller and return the inner frame.
@@ -1378,6 +1426,17 @@ class ProductionGui(tk.Tk):
         if not self.target_area_file_var.get().strip() and self.map_id_var.get().strip():
             self.target_area_file_var.set(default_area_target_file(self.map_id_var.get().strip()))
 
+    @staticmethod
+    def _parse_gap_override(raw: str) -> float | None:
+        """空=用档位默认；非数字先返回 None，由 _validate_form 给出中文报错。"""
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
     def _form_state(self) -> GuiFormState:
         wait_timeout = int(self.timeout_var.get().strip() or "300")
         text_path = self.text_candidates_var.get().strip()
@@ -1397,6 +1456,9 @@ class ProductionGui(tk.Tk):
             include_areas=self.include_areas_var.get(),
             conversion_mode=self.conversion_mode_var.get().strip(),
             line_engine=self.line_engine_var.get().strip() or "hough",
+            line_connect=self.line_connect_var.get().strip() or DEFAULT_LINE_CONNECT,
+            line_bridge_gap_px=self._parse_gap_override(self.line_bridge_gap_var.get()),
+            line_close_gap_px=self._parse_gap_override(self.line_close_gap_var.get()),
             line_repair=self.line_repair_var.get().strip() or "off",
             line_export_source=self.line_export_source_var.get().strip() or "raw",
             ai_enhance=self.ai_enhance_var.get(),
@@ -1425,6 +1487,21 @@ class ProductionGui(tk.Tk):
             return "转换模式只能是 none、prepare 或 cli。"
         if state.line_engine not in {"hough", "trace"}:
             return "线提取引擎只能是 hough 或 trace。"
+        if state.line_connect not in {"conservative", "standard", "aggressive"}:
+            return "线条连接程度只能是 conservative、standard 或 aggressive。"
+        for label, raw in (
+            ("桥接最大断口", self.line_bridge_gap_var.get()),
+            ("闭合收口最大缺口", self.line_close_gap_var.get()),
+        ):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                value = float(raw)
+            except ValueError:
+                return f"{label}只能填数字（像素），或留空使用档位默认值。"
+            if value < 0:
+                return f"{label}不能为负数；填 0 表示关闭该功能。"
         if state.level_input not in {"auto", "force", "off"}:
             return "输入调平只能是 auto、force 或 off。"
         if state.enhanced_preview not in {"none", "light", "standard", "strong"}:
@@ -1554,7 +1631,20 @@ class ProductionGui(tk.Tk):
                 report = run_production_program(
                     config, should_stop=self._run_stop_requested.is_set
                 )
-                self._messages.put(completion_message_for_report(report))
+                kind_and_message = completion_message_for_report(report)
+                self._messages.put(kind_and_message)
+                if kind_and_message[0] == "ok":
+                    # 跑完直接弹出交付文件夹，省得手动找输出。
+                    load_folder = str(
+                        (report.get("mapgis_load_ready") or {}).get("load_folder") or ""
+                    )
+                    folder = (
+                        load_folder
+                        if load_folder and Path(load_folder).is_dir()
+                        else str(report.get("output_root") or "")
+                    )
+                    if folder and Path(folder).is_dir():
+                        os.startfile(folder)  # type: ignore[attr-defined]
             except RunCancelledError:
                 self._messages.put(
                     (
@@ -1629,7 +1719,10 @@ class ProductionGui(tk.Tk):
         self._run_stop_requested.clear()
         self.notebook.select(self.batch_tab)
         self._set_busy(True)
-        self._log(f"开始批量：{len(rasters)} 张图，引擎={state.line_engine}，转换={state.conversion_mode}")
+        self._log(
+            f"开始批量：{len(rasters)} 张图，引擎={state.line_engine}，"
+            f"连接={state.line_connect}，转换={state.conversion_mode}"
+        )
         if config.ai_api_key:
             self._log(f"AI key={redact_api_key(config.ai_api_key)}（仅本次会话，不落盘）")
 
@@ -1650,6 +1743,9 @@ class ProductionGui(tk.Tk):
                 )
                 kind = "ok" if counts["failed"] == 0 else "warning"
                 self._messages.put((kind, summary))
+                batch_dir = Path(config.project_root) / "BATCH_OPS"
+                if batch_dir.is_dir():
+                    os.startfile(str(batch_dir))  # type: ignore[attr-defined]
             except Exception as exc:  # pragma: no cover - UI runtime path.
                 self._messages.put(("error", friendly_error_message(exc)))
 

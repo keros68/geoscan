@@ -29,7 +29,12 @@ from geoscan.env_probe import (
 )
 from geoscan.grouped_exchange import safe_target_stem
 from geoscan.line_candidate_workflow import generate_review_line_candidates
-from geoscan.line_repair_stage import generate_repaired_line_candidates
+from geoscan.line_connectivity import (
+    VALID_LINE_CONNECT_MODES,
+    resolve_connectivity_profile,
+)
+from geoscan.line_repair_stage import RepairStageConfig, generate_repaired_line_candidates
+from geoscan.text_interference import write_text_flagged_line_export
 from geoscan.raster_enhance import ENHANCE_PRESETS, enhance_image_file
 from geoscan.raster_level import (
     LevelParams,
@@ -95,6 +100,14 @@ class ProgramConfig:
     ai_model: str = ""
     conversion_mode: str = "prepare"
     line_engine: str = "hough"
+    # Connectivity level: how aggressively broken strokes are reconnected
+    # (engine gap thresholds + deterministic ink-evidence bridging).
+    # "conservative" reproduces the historical behavior exactly.
+    line_connect: str = "conservative"
+    # Optional numeric fine-tuning on top of the level (None = level default,
+    # 0 = off): max endpoint-bridging gap / max ring snap-close gap, in px.
+    line_bridge_gap_px: float | None = None
+    line_close_gap_px: float | None = None
     line_repair: str = "off"
     line_export_source: str = "raw"
     ai_enhance: bool = False
@@ -683,7 +696,40 @@ def _run_conversion_stage(
         conversion_backend="w60",
         wait_timeout_seconds=wait_timeout_seconds,
     )
-    return {
+
+    # Optional WP area conversion: after the required WL/WT pipeline, drive
+    # W60_Conv 装入SHAPE文件 -> 换名存区 for the area Shapefile. The verified
+    # .WP lands in the same ready dir, so MAPGIS_LOAD_READY picks it up
+    # automatically. Areas stay optional: a WP failure never flips the overall
+    # conversion result.
+    area_wp_report: dict[str, Any] | None = None
+    area_packages = [
+        report
+        for report in written_reports
+        if _exchange_export_record(report)[0] == "shp" and report.get("target_file")
+    ]
+    if pipeline_report["ok"] and area_packages:
+        from geoscan.mapgis67_bridge import w60_shape_to_wp
+
+        area_package = area_packages[0]
+        shp_path = Path(str((area_package.get("shp_export") or {}).get("path", "")))
+        target_wp = ready_dir / str(area_package["target_file"])
+        try:
+            area_wp_report = w60_shape_to_wp(
+                shp_path=shp_path,
+                target_wp=target_wp,
+                wait_timeout_seconds=min(wait_timeout_seconds, 180),
+                report_path=output_root / "07_AREA_SECTION_W60" / "W60_SHAPE_TO_WP_REPORT.json",
+            )
+        except Exception as exc:
+            area_wp_report = {
+                "action": "w60_shape_to_wp",
+                "ok": False,
+                "status": "automation_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    result = {
         "mode": mode,
         "status": "converted" if pipeline_report["ok"] else "conversion_incomplete",
         "ok": bool(pipeline_report["ok"]),
@@ -692,6 +738,9 @@ def _run_conversion_stage(
         "pipeline": pipeline_report,
         "note": "No Computer Use fallback is accepted; failed bridge conversion remains incomplete.",
     }
+    if area_wp_report is not None:
+        result["area_wp"] = area_wp_report
+    return result
 
 
 def _run_ai_visual_review_stage(
@@ -800,6 +849,13 @@ def run_production_program(
 
     if config.line_engine not in VALID_LINE_ENGINES:
         raise ValueError(f"line_engine must be one of {sorted(VALID_LINE_ENGINES)}")
+    connectivity_profile = resolve_connectivity_profile(config.line_connect)
+    for override_name, override_value in (
+        ("line_bridge_gap_px", config.line_bridge_gap_px),
+        ("line_close_gap_px", config.line_close_gap_px),
+    ):
+        if override_value is not None and float(override_value) < 0:
+            raise ValueError(f"{override_name} must be >= 0 (0 turns the pass off)")
     if config.level_input not in VALID_LEVEL_INPUT_MODES:
         raise ValueError(f"level_input must be one of {sorted(VALID_LEVEL_INPUT_MODES)}")
     if config.enhanced_preview not in VALID_ENHANCED_PREVIEW_MODES:
@@ -892,6 +948,9 @@ def run_production_program(
             output_root=output_root,
             map_id=config.map_id,
             engine=config.line_engine,
+            connectivity=config.line_connect,
+            bridge_gap_px=config.line_bridge_gap_px,
+            close_gap_px=config.line_close_gap_px,
         )
         line_candidates_path = Path(str(line_candidate_generation["output_geojson"]))
 
@@ -901,6 +960,9 @@ def run_production_program(
         line_repair_report = generate_repaired_line_candidates(
             output_root=output_root,
             map_id=config.map_id,
+            config=RepairStageConfig(
+                small_gap_tolerance=connectivity_profile.repair_small_gap_tolerance
+            ),
             image_width=float(input_report["width"]),
             image_height=float(input_report["height"]),
             reset=True,
@@ -971,7 +1033,7 @@ def run_production_program(
 
     ai_enhance_report: dict[str, Any] | None = None
     if config.ai_enhance:
-        from geoscan.ai_enhance import run_ai_enhance_stage
+        from geoscan.ai_enhance import AiEnhanceThresholds, run_ai_enhance_stage
 
         try:
             ai_enhance_report = run_ai_enhance_stage(
@@ -984,6 +1046,10 @@ def run_production_program(
                 output_root=output_root,
                 map_id=config.map_id,
                 frozen_raster=working_raster,
+                thresholds=AiEnhanceThresholds(
+                    max_gap_px=connectivity_profile.ai_max_gap_px,
+                    min_dark_coverage=connectivity_profile.ai_min_dark_coverage,
+                ),
             )
         except Exception as exc:
             ai_enhance_report = {
@@ -1012,6 +1078,34 @@ def run_production_program(
                 "this run; rerun with a working AI provider or export repaired instead."
             )
         line_export_path = Path(str(ai_enhance_report["enhanced_geojson"]))
+
+    # Split out line candidates living inside text candidate bboxes (glyph
+    # outlines of big titles/labels): the main export -> DXF -> WL stays
+    # clean, the removed strokes land in a review sidecar. Source layers stay
+    # byte-identical; skipped entirely when nothing gets flagged.
+    text_interference_report: dict[str, Any] | None = None
+    if (
+        line_export_path is not None
+        and text_candidates_path is not None
+        and _count_geojson_features(line_export_path) > 0
+    ):
+        line_workflow_dir = output_root / "04_LINE_WORKFLOW"
+        flagged_path = (
+            line_workflow_dir
+            / f"{config.map_id.lower()}_export_line_candidates_text_flagged.geojson"
+        )
+        text_interference_report = write_text_flagged_line_export(
+            line_export_path,
+            text_candidates_path,
+            flagged_path,
+            image_height=float(input_report["height"]),
+            sidecar_path=(
+                line_workflow_dir
+                / f"{config.map_id.lower()}_text_interference_lines.geojson"
+            ),
+        )
+        if text_interference_report.get("written"):
+            line_export_path = flagged_path
 
     line_report: dict[str, Any] | None = None
     if line_export_path is not None and _count_geojson_features(line_export_path) > 0:
@@ -1093,6 +1187,14 @@ def run_production_program(
         "input": input_report,
         "raster_alignment": raster_alignment_report,
         "line_engine": config.line_engine,
+        "line_connect": config.line_connect,
+        "line_bridge_gap_px": config.line_bridge_gap_px,
+        "line_close_gap_px": config.line_close_gap_px,
+        "text_interference": (
+            text_interference_report
+            if text_interference_report is not None
+            else {"enabled": False}
+        ),
         "line_candidate_generation": line_candidate_generation,
         "line_repair": line_repair_report if line_repair_report is not None else {"mode": "off"},
         "line_ai_review": line_ai_review_report,
@@ -1145,6 +1247,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=sorted(VALID_LINE_ENGINES),
         default="hough",
         help="Line candidate engine: hough (production default, straight only) or trace (centerline tracing, straight + curve + loop).",
+    )
+    run.add_argument(
+        "--line-connect",
+        choices=sorted(VALID_LINE_CONNECT_MODES),
+        default="conservative",
+        help=(
+            "Line connectivity level. conservative (default): historical behavior, no "
+            "extra reconnection. standard/aggressive: engines jump larger breaks and a "
+            "deterministic bridging pass reconnects endpoints where the raster shows ink "
+            "along the whole bridge (never invents lines; all candidates stay checked=no)."
+        ),
+    )
+    run.add_argument(
+        "--line-bridge-gap-px",
+        type=float,
+        default=None,
+        help=(
+            "Fine-tune: max endpoint-bridging gap in px, overriding the level "
+            "(standard=60, aggressive=100). 0 disables bridging; omit to use the level."
+        ),
+    )
+    run.add_argument(
+        "--line-close-gap-px",
+        type=float,
+        default=None,
+        help=(
+            "Fine-tune: max ring snap-close gap in px for nearly-closed polylines "
+            "(legend boxes, closed outlines), overriding the level (standard=12, "
+            "aggressive=20). 0 disables; omit to use the level."
+        ),
     )
     run.add_argument(
         "--level-input",
@@ -1245,6 +1377,9 @@ def main(argv: list[str] | None = None) -> None:
                     ai_model=args.ai_model,
                     conversion_mode=args.conversion_mode,
                     line_engine=args.line_engine,
+                    line_connect=args.line_connect,
+                    line_bridge_gap_px=args.line_bridge_gap_px,
+                    line_close_gap_px=args.line_close_gap_px,
                     line_repair=args.line_repair,
                     line_export_source=args.line_export_source,
                     ai_enhance=bool(args.ai_enhance),

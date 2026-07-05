@@ -39,6 +39,7 @@ from geoscan.production_program import (
     VALID_LEVEL_INPUT_MODES,
     VALID_LINE_ENGINES,
     VALID_LINE_EXPORT_SOURCES,
+    VALID_LINE_CONNECT_MODES,
     VALID_LINE_REPAIR_MODES,
     DonglePrecheckError,
     ProgramConfig,
@@ -79,6 +80,9 @@ class BatchConfig:
     source_rasters: tuple[Path, ...]
     conversion_mode: str = "none"
     line_engine: str = "hough"
+    line_connect: str = "conservative"
+    line_bridge_gap_px: float | None = None
+    line_close_gap_px: float | None = None
     line_repair: str = "off"
     line_export_source: str = "raw"
     ai_enhance: bool = False
@@ -182,6 +186,10 @@ def run_batch(
         raise ValueError(f"conversion_mode must be one of {sorted(VALID_CONVERSION_MODES)}")
     if config.line_engine not in VALID_LINE_ENGINES:
         raise ValueError(f"line_engine must be one of {sorted(VALID_LINE_ENGINES)}")
+    if config.line_connect not in VALID_LINE_CONNECT_MODES:
+        raise ValueError(
+            f"line_connect must be one of {sorted(VALID_LINE_CONNECT_MODES)}"
+        )
     if config.line_repair not in VALID_LINE_REPAIR_MODES:
         raise ValueError(f"line_repair must be one of {sorted(VALID_LINE_REPAIR_MODES)}")
     if config.line_export_source not in VALID_LINE_EXPORT_SOURCES:
@@ -311,6 +319,9 @@ def run_batch(
                     include_areas=config.include_areas,
                     conversion_mode=config.conversion_mode,
                     line_engine=config.line_engine,
+                    line_connect=config.line_connect,
+                    line_bridge_gap_px=config.line_bridge_gap_px,
+                    line_close_gap_px=config.line_close_gap_px,
                     line_repair=config.line_repair,
                     line_export_source=config.line_export_source,
                     ai_enhance=config.ai_enhance,
@@ -366,6 +377,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     source.add_argument("--map-list", type=Path, help="CSV with one source raster path per row.")
     run.add_argument("--conversion-mode", choices=sorted(VALID_CONVERSION_MODES), default="none")
     run.add_argument("--line-engine", choices=sorted(VALID_LINE_ENGINES), default="hough")
+    run.add_argument(
+        "--line-connect",
+        choices=sorted(VALID_LINE_CONNECT_MODES),
+        default="conservative",
+        help="Line connectivity level (see production_program --line-connect).",
+    )
+    run.add_argument(
+        "--line-bridge-gap-px",
+        type=float,
+        default=None,
+        help="Fine-tune: max bridging gap px (see production_program --line-bridge-gap-px).",
+    )
+    run.add_argument(
+        "--line-close-gap-px",
+        type=float,
+        default=None,
+        help="Fine-tune: max ring snap-close gap px (see production_program --line-close-gap-px).",
+    )
     run.add_argument("--line-repair", choices=sorted(VALID_LINE_REPAIR_MODES), default="off")
     run.add_argument(
         "--line-export-source", choices=sorted(VALID_LINE_EXPORT_SOURCES), default="raw"
@@ -442,6 +471,9 @@ def main(argv: list[str] | None = None) -> int:
                 source_rasters=tuple(rasters),
                 conversion_mode=args.conversion_mode,
                 line_engine=args.line_engine,
+                line_connect=args.line_connect,
+                line_bridge_gap_px=args.line_bridge_gap_px,
+                line_close_gap_px=args.line_close_gap_px,
                 line_repair=args.line_repair,
                 line_export_source=args.line_export_source,
                 ai_enhance=bool(args.ai_enhance),
