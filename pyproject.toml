@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geoscan"
-version = "0.1.0"
+version = "0.2.3"
 description = "Semi-automatic vectorization of scanned geologic section maps into editable MapGIS 6.7 candidates."
 readme = "README.md"
 requires-python = ">=3.12"
