@@ -11,7 +11,7 @@
 
 #define AppName "GeoScan"
 ; Keep this in step with src/geoscan/__init__.py __version__ and the release tag.
-#define AppVersion "0.2.0"
+#define AppVersion "0.2.1"
 ; Primary UI since 0.2.0: the Tauri console shell. It spawns the frozen Python
 ; engine via "GeoScan.exe --engine". The classic tkinter GUI stays installed as
 ; a fallback entry for one release line.
