@@ -4,10 +4,6 @@ GeoScan 用来处理扫描地质剖面图。输入 TIFF/JPG，程序提取线、
 
 它不是自动判图软件。所有候选默认 `checked=no`，AI 也只做诊断建议；最终以人工复核为准。
 
-作者：keros68
-项目仓库：[keros68/geoscan](https://github.com/keros68/geoscan)
-邮箱：keros68@gmal.com
-
 > 中文为主，English summary below.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
