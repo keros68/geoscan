@@ -25,7 +25,7 @@ import json
 import sys
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -44,6 +44,7 @@ from geoscan.production_program import (
     DonglePrecheckError,
     ProgramConfig,
     _dongle_precheck_message,
+    conversion_outcome,
     derive_map_id_from_filename,
     run_production_program,
 )
@@ -142,6 +143,18 @@ def _shp_status(report: dict[str, Any] | None) -> str:
     if not report:
         return "absent"
     return str((report.get("shp_export") or {}).get("status") or "absent")
+
+
+def _conversion_failed(report: dict[str, Any]) -> bool:
+    """True when the run's conversion stage failed (outcome == "failed").
+
+    A missing conversion section stays "not failed" here (same as the old
+    ``ok is False`` test) — such a report never came from a real run.
+    """
+    conversion = report.get("conversion")
+    if not isinstance(conversion, dict) or not conversion:
+        return False
+    return conversion_outcome(conversion) == "failed"
 
 
 def _row_from_run_report(report: dict[str, Any]) -> dict[str, Any]:
@@ -266,9 +279,7 @@ def run_batch(
             try:
                 existing_report = json.loads(run_report_path.read_text(encoding="utf-8"))
                 row.update(_row_from_run_report(existing_report))
-                existing_conversion_failed = (
-                    (existing_report.get("conversion") or {}).get("ok") is False
-                )
+                existing_conversion_failed = _conversion_failed(existing_report)
             except (json.JSONDecodeError, OSError) as exc:
                 row["error"] = f"unreadable existing run report: {exc}"
             if not existing_conversion_failed:
@@ -332,7 +343,7 @@ def run_batch(
                 )
             )
             row.update(_row_from_run_report(run_report))
-            if (run_report.get("conversion") or {}).get("ok") is False:
+            if _conversion_failed(run_report):
                 row["status"] = "conversion_failed"
                 row["error"] = (
                     "conversion ok=false "

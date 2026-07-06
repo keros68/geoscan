@@ -25,6 +25,7 @@ from geoscan.production_program import (
     VALID_ENHANCED_PREVIEW_MODES,
     VALID_LEVEL_INPUT_MODES,
     VALID_LINE_ENGINES,
+    conversion_outcome,
     default_area_target_file,
     default_line_target_file,
     default_text_target_file,
@@ -478,11 +479,12 @@ def completion_message_for_report(report: dict[str, Any]) -> tuple[str, str]:
         lines.append("转换状态: 未返回转换报告。未生成 WT/WL。")
         return "warning", "\n".join(lines)
 
+    outcome = conversion_outcome(conversion)
     status = str(conversion.get("status") or "")
     mode = str(conversion.get("mode") or "")
     ok = conversion.get("ok")
 
-    if status == "converted" and ok is True:
+    if outcome == "converted":
         lines.append("转换状态: 已生成 WT/WL，并收集到 MAPGIS_READY。")
         lines.append("")
         lines.append(
@@ -491,12 +493,17 @@ def completion_message_for_report(report: dict[str, Any]) -> tuple[str, str]:
         )
         return "ok", "\n".join(lines)
 
-    if status == "prepared":
+    if outcome == "prepared":
         lines.append("转换状态: prepare 已完成，只准备了 SECTION 批次；未生成 WT/WL。")
         lines.append("下一步: 切换到 conversion_mode=cli 重新运行，或单独修复/运行 MCP 桥接转换。")
         return "warning", "\n".join(lines)
 
-    if status == "not_requested" or mode == "none":
+    if status == "no_exchange_package":
+        # 零候选也算 skipped，但值得提醒：整张图没有产出任何可转换的导出。
+        lines.append("转换状态: 本次没有可转换的交换包（未生成任何线/文字导出）。未生成 WT/WL。")
+        return "warning", "\n".join(lines)
+
+    if outcome == "skipped":
         lines.append(f"转换状态: {status or mode}；本次未请求生成 WT/WL。")
         return "ok", "\n".join(lines)
 

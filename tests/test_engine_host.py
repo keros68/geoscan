@@ -166,6 +166,38 @@ def test_stage_states_prepare_is_skipped_not_failed():
     assert states["DXF_EXPORT"] == "completed"
 
 
+def test_stage_states_prepare_failure_is_failed_not_skipped():
+    # prepare was explicitly requested; a failed prepare is a real failure.
+    # Every other surface (completion message, batch row, exit code) already
+    # treats it that way — the rail must agree, for legacy reports (no
+    # "outcome" key, derived) and stamped ones alike.
+    for status in ("prepare_failed", "dxf_not_exported"):
+        report = {
+            "line_candidate_generation": {"ok": True},
+            "text_candidate_generation": {"ok": True},
+            "conversion": {"mode": "prepare", "status": status, "ok": False},
+        }
+        assert stage_states_from_report(report)["08_SECTION_W60"] == "failed", status
+
+        report["conversion"]["outcome"] = "failed"
+        assert stage_states_from_report(report)["08_SECTION_W60"] == "failed", status
+
+
+def test_stage_states_no_exchange_package_is_skipped_not_failed():
+    # Zero exportable candidates means nothing to convert — that is a skip,
+    # not a bridge failure. Legacy reports carry no "outcome" key, so both
+    # the stamped and the derived paths must agree.
+    report = {
+        "line_candidate_generation": {"ok": True, "feature_count": 0},
+        "text_candidate_generation": {"ok": True, "feature_count": 0},
+        "conversion": {"mode": "cli", "status": "no_exchange_package", "ok": None},
+    }
+    assert stage_states_from_report(report)["08_SECTION_W60"] == "skipped"
+
+    report["conversion"]["outcome"] = "skipped"
+    assert stage_states_from_report(report)["08_SECTION_W60"] == "skipped"
+
+
 def test_stage_states_missing_text_dxf_is_a_failure():
     # Repo rule: line AND text DXF must always be produced — a missing DXF is
     # a bug, so half an export must never read as "completed".

@@ -67,6 +67,7 @@ from geoscan.run_form import (
 )
 from geoscan.production_program import (
     RunCancelledError,
+    conversion_outcome,
     redact_api_key,
     run_production_program,
 )
@@ -225,11 +226,10 @@ def stage_states_from_report(report: dict[str, Any], *, cancelled: bool = False)
 
     conversion = report.get("conversion")
     if isinstance(conversion, dict):
-        status = str(conversion.get("status") or "")
-        mode = str(conversion.get("mode") or "")
-        if status == "converted" and conversion.get("ok") is True:
+        outcome = conversion_outcome(conversion)
+        if outcome == "converted":
             states["08_SECTION_W60"] = "completed"
-        elif status == "prepared" or mode in {"none", "prepare"} or status == "not_requested":
+        elif outcome in {"prepared", "skipped"}:
             states["08_SECTION_W60"] = "skipped"
         else:
             states["08_SECTION_W60"] = "failed"

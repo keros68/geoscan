@@ -281,6 +281,22 @@ def test_gui_completion_summary_mentions_optional_area_exchange():
     assert "T13AREA_WP.shp" in message
 
 
+def test_gui_completion_summary_warns_when_no_exchange_package_existed():
+    kind, message = completion_message_for_report(
+        {
+            "output_root": "C:/maps/T01_0013_P",
+            "conversion": {
+                "mode": "cli",
+                "status": "no_exchange_package",
+                "ok": None,
+            },
+        }
+    )
+
+    assert kind == "warning"
+    assert "转换状态: 本次没有可转换的交换包（未生成任何线/文字导出）。未生成 WT/WL。" in message
+
+
 def test_gui_completion_summary_warns_when_cli_conversion_failed():
     kind, message = completion_message_for_report(
         {

@@ -84,6 +84,32 @@ VALID_ENHANCED_PREVIEW_MODES = {"none"} | set(ENHANCE_PRESETS)
 PIXEL_UNIT_DPI = 25.4
 
 
+def conversion_outcome(conversion: Any) -> str:
+    """Single source of truth: what did the conversion stage mean for this run?
+
+    Returns "converted" | "prepared" | "skipped" | "failed". New reports carry
+    an explicit ``outcome`` key (stamped by ``run_production_program``); old
+    PROGRAM_RUN_REPORT.json files on disk predate it, so the legacy
+    status/ok/mode derivation below must stay (the console history view still
+    parses them). ``no_text_package`` is the historical name of
+    ``no_exchange_package``.
+    """
+    if not isinstance(conversion, dict) or not conversion:
+        return "failed"
+    outcome = conversion.get("outcome")
+    if isinstance(outcome, str) and outcome:
+        return outcome
+    status = str(conversion.get("status") or "")
+    mode = str(conversion.get("mode") or "")
+    if status == "converted" and conversion.get("ok") is True:
+        return "converted"
+    if status == "prepared":
+        return "prepared"
+    if status in {"not_requested", "no_exchange_package", "no_text_package"} or mode == "none":
+        return "skipped"
+    return "failed"
+
+
 @dataclass(frozen=True)
 class ProgramConfig:
     project_root: Path
@@ -1230,6 +1256,7 @@ def run_production_program(
         output_root=output_root,
         wait_timeout_seconds=config.wait_timeout_seconds,
     )
+    conversion_report["outcome"] = conversion_outcome(conversion_report)
     ai_visual_report = _run_ai_visual_review_stage(
         config=config,
         frozen_raster=working_raster,

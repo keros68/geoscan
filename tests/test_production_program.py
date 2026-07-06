@@ -172,6 +172,7 @@ def test_program_creates_fresh_run_package_without_ai_or_computer_use(tmp_path):
     assert report["computer_use"]["allowed"] is False
     assert report["conversion"]["mode"] == "none"
     assert report["conversion"]["status"] == "not_requested"
+    assert report["conversion"]["outcome"] == "skipped"
     assert report["text"]["source_text_count"] == 2
     assert report["text"]["placeholder_text_count"] == 1
 
@@ -568,6 +569,7 @@ def test_program_reports_prepare_blocked_when_dxf_export_is_disabled(tmp_path):
     assert report["text"]["dxf_export"]["status"] == "skipped"
     assert report["conversion"]["status"] == "dxf_not_exported"
     assert report["conversion"]["ok"] is False
+    assert report["conversion"]["outcome"] == "failed"
 
 
 def test_program_refuses_non_short_output_root(tmp_path):
