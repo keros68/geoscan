@@ -368,6 +368,25 @@ def test_gui_window_initializes_without_name_error(monkeypatch):
         app.destroy()
 
 
+def test_gui_has_menu_bar_and_full_tab_names(monkeypatch):
+    monkeypatch.delenv("MAPGIS_OCR_PYTHON", raising=False)
+    try:
+        app = ProductionGui()
+    except Exception as exc:
+        if exc.__class__.__name__ == "TclError":
+            pytest.skip(f"Tk display is not available: {exc}")
+        raise
+    try:
+        # 专业外壳：常规菜单栏存在，且不再有线框图时期的假数据组件。
+        assert str(app.cget("menu"))
+        for fake_widget in ("stage_labels", "project_tree", "canvas_placeholder", "inspector_frame"):
+            assert not hasattr(app, fake_widget)
+        assert app.notebook.tab(app.log_tab, "text") == "运行日志"
+        assert app.notebook.tab(app.batch_tab, "text") == "批量运行"
+    finally:
+        app.destroy()
+
+
 def test_default_project_root_prefers_saved_setting(tmp_path, monkeypatch):
     from geoscan import production_gui
 

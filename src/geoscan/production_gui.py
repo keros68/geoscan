@@ -555,6 +555,8 @@ class ProductionGui(tk.Tk):
                 self.env_status_label.configure(style="Warn.TLabel")
 
     def _build_layout(self) -> None:
+        self._build_menu_bar()
+
         root = ttk.Frame(self, padding=12)
         root.pack(fill=tk.BOTH, expand=True)
         root.columnconfigure(1, weight=1)
@@ -565,10 +567,16 @@ class ProductionGui(tk.Tk):
             text="新手三步：①选择输入图片（Map ID 自动识别）→ ②点“开始运行” → "
             "③完成后点“打开输出文件夹”，在 MapGIS 中装入 MAPGIS_LOAD_READY 里的文件",
             style="Guide.TLabel",
-            wraplength=940,
+            wraplength=980,
             justify="left",
         ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 4))
-        self.env_status_label = ttk.Label(root, textvariable=self.env_status_var, style="Hint.TLabel")
+        self.env_status_label = ttk.Label(
+            root,
+            textvariable=self.env_status_var,
+            style="Hint.TLabel",
+            wraplength=980,
+            justify="left",
+        )
         self.env_status_label.grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 8))
 
         self._path_row(root, 2, "① 输入图片", self.source_raster_var, self._choose_source_raster)
@@ -680,6 +688,31 @@ class ProductionGui(tk.Tk):
             style="Side.TButton",
             command=self._open_output_folder,
         ).grid(row=0, column=4, padx=(8, 0))
+
+    def _build_menu_bar(self) -> None:
+        # SPSS 风格的常规菜单栏：只放已有功能的入口，不新增行为。
+        menubar = tk.Menu(self)
+        file_menu = tk.Menu(menubar, tearoff=False)
+        file_menu.add_command(label="打开输入图片…", command=self._choose_source_raster)
+        file_menu.add_command(label="打开输出文件夹", command=self._open_output_folder)
+        file_menu.add_separator()
+        file_menu.add_command(label="退出", command=self.destroy)
+        run_menu = tk.Menu(menubar, tearoff=False)
+        run_menu.add_command(label="开始运行", command=self._run)
+        run_menu.add_command(label="安全停止", command=self._request_stop)
+        run_menu.add_separator()
+        run_menu.add_command(label="开始批量", command=self._run_batch)
+        run_menu.add_command(label="完成当前图后停止批量", command=self._request_batch_stop)
+        tools_menu = tk.Menu(menubar, tearoff=False)
+        tools_menu.add_command(label="高级运行参数…", command=self._open_advanced_dialog)
+        tools_menu.add_command(label="自动探测本机程序", command=self._autodetect_tools)
+        tools_menu.add_command(label="重新检测转换环境", command=self._refresh_env_status)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="检查更新", command=self._check_for_update)
+        menubar.add_cascade(label="文件", menu=file_menu)
+        menubar.add_cascade(label="运行", menu=run_menu)
+        menubar.add_cascade(label="工具", menu=tools_menu)
+        self.configure(menu=menubar)
 
     def _request_stop(self) -> None:
         self._run_stop_requested.set()
