@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from geoscan.production_gui import (
+from geoscan.production_program import redact_api_key
+from geoscan.run_form import (
     GuiFormState,
-    ProductionGui,
     build_ai_config_from_gui,
     build_batch_config_from_gui,
     build_program_config_from_gui,
@@ -14,8 +12,8 @@ from geoscan.production_gui import (
     default_map_id_from_image,
     default_output_root_from_parent,
     friendly_error_message,
-    redact_api_key,
     run_notice_for_state,
+    validate_form_state,
 )
 
 
@@ -84,6 +82,54 @@ def test_gui_config_passes_optional_area_settings(tmp_path):
 
     assert config.include_areas is True
     assert config.target_area_file == "T06AREA.WP"
+
+
+def test_validate_output_categories_allow_qgis_without_mapgis_or_dxf(tmp_path, monkeypatch):
+    from geoscan import run_form
+
+    raster = tmp_path / "t01_0006.tif"
+    raster.write_bytes(b"fake")
+    monkeypatch.setattr(
+        run_form,
+        "missing_conversion_tools",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("MapGIS tools should not be checked")
+        ),
+    )
+
+    error = validate_form_state(
+        GuiFormState(
+            project_root=tmp_path,
+            source_raster=raster,
+            map_id="T01_0006",
+            output_parent=tmp_path,
+            conversion_mode="none",
+            export_dxf=False,
+            qgis_files=True,
+        )
+    )
+
+    assert error is None
+
+
+def test_validate_output_categories_reject_mapgis_without_dxf(tmp_path):
+    raster = tmp_path / "t01_0006.tif"
+    raster.write_bytes(b"fake")
+
+    error = validate_form_state(
+        GuiFormState(
+            project_root=tmp_path,
+            source_raster=raster,
+            map_id="T01_0006",
+            output_parent=tmp_path,
+            conversion_mode="cli",
+            export_dxf=False,
+            qgis_files=True,
+        )
+    )
+
+    assert error is not None
+    assert "MapGIS 转换依赖 DXF" in error
 
 
 def test_gui_builds_ai_vision_config_from_form_state(tmp_path):
@@ -342,70 +388,25 @@ def test_gui_batch_config_reuses_form_options(tmp_path):
     assert config.limit == 5
 
 
-def test_gui_window_initializes_without_name_error(monkeypatch):
-    monkeypatch.delenv("MAPGIS_OCR_PYTHON", raising=False)
-    try:
-        app = ProductionGui()
-    except Exception as exc:
-        if exc.__class__.__name__ == "TclError":
-            pytest.skip(f"Tk display is not available: {exc}")
-        raise
-    try:
-        assert app.notebook is not None
-        assert app.log_tab is not None
-        assert app.batch_tab is not None
-        assert app.batch_tree is not None
-        assert app.line_engine_var.get() == "trace"
-        assert app.line_repair_var.get() == "conservative"
-        assert app.line_export_source_var.get() == "repaired"
-        assert app.ocr_python_var.get() == ""
-        assert app.conversion_mode_var.get() == "cli"
-        assert app.ai_provider_var.get() == "none"
-        assert app.ai_base_url_var.get() == "https://api.siliconflow.cn/v1/chat/completions"
-        assert app.ai_model_var.get() == "Qwen/Qwen3-VL-32B-Instruct"
-        assert app.ai_api_key_var.get() == ""
-    finally:
-        app.destroy()
-
-
-def test_gui_has_menu_bar_and_full_tab_names(monkeypatch):
-    monkeypatch.delenv("MAPGIS_OCR_PYTHON", raising=False)
-    try:
-        app = ProductionGui()
-    except Exception as exc:
-        if exc.__class__.__name__ == "TclError":
-            pytest.skip(f"Tk display is not available: {exc}")
-        raise
-    try:
-        # 专业外壳：常规菜单栏存在，且不再有线框图时期的假数据组件。
-        assert str(app.cget("menu"))
-        for fake_widget in ("stage_labels", "project_tree", "canvas_placeholder", "inspector_frame"):
-            assert not hasattr(app, fake_widget)
-        assert app.notebook.tab(app.log_tab, "text") == "运行日志"
-        assert app.notebook.tab(app.batch_tab, "text") == "批量运行"
-    finally:
-        app.destroy()
-
-
 def test_default_project_root_prefers_saved_setting(tmp_path, monkeypatch):
-    from geoscan import production_gui
+    from geoscan import run_form
 
     saved = tmp_path / "work"
     saved.mkdir()
-    assert production_gui.default_project_root({"project_root": str(saved)}) == saved
+    assert run_form.default_project_root({"project_root": str(saved)}) == saved
 
-    monkeypatch.setattr(production_gui, "DEFAULT_PROJECT_ROOT", tmp_path / "missing")
-    monkeypatch.setattr(production_gui.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(run_form, "DEFAULT_PROJECT_ROOT", tmp_path / "missing")
+    monkeypatch.setattr(run_form.sys, "frozen", False, raising=False)
     assert (
-        production_gui.default_project_root({"project_root": str(tmp_path / "nope")})
+        run_form.default_project_root({"project_root": str(tmp_path / "nope")})
         == Path.cwd()
     )
 
 
 def test_default_project_root_falls_back_to_dev_default(tmp_path, monkeypatch):
-    from geoscan import production_gui
+    from geoscan import run_form
 
     dev_root = tmp_path / "dev_root"
     dev_root.mkdir()
-    monkeypatch.setattr(production_gui, "DEFAULT_PROJECT_ROOT", dev_root)
-    assert production_gui.default_project_root({}) == dev_root
+    monkeypatch.setattr(run_form, "DEFAULT_PROJECT_ROOT", dev_root)
+    assert run_form.default_project_root({}) == dev_root

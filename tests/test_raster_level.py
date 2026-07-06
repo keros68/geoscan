@@ -166,7 +166,7 @@ def test_cli_and_config_defaults_level_off() -> None:
 
 
 def test_gui_routes_level_input_into_both_configs() -> None:
-    from geoscan.production_gui import (
+    from geoscan.run_form import (
         GuiFormState,
         build_batch_config_from_gui,
         build_program_config_from_gui,

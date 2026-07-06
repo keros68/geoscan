@@ -80,11 +80,13 @@ def split_text_interference_lines(
     for item in line_features:
         geometry = item.get("geometry") or {}
         coordinates = geometry.get("coordinates") or []
-        clone = json.loads(json.dumps(item, ensure_ascii=False))
         if (
             geometry.get("type") == "LineString"
             and _inside_fraction(coordinates, boxes) >= min_inside_fraction
         ):
+            # Only flagged features get rewritten properties, so only they
+            # need a deep clone; kept features pass through by reference.
+            clone = json.loads(json.dumps(item, ensure_ascii=False))
             props = clone.setdefault("properties", {})
             props["original_cad_layer"] = props.get("cad_layer", "")
             props["cad_layer"] = TEXT_INTERFERENCE_LAYER
@@ -95,7 +97,7 @@ def split_text_interference_lines(
             )
             removed.append(clone)
         else:
-            kept.append(clone)
+            kept.append(item)
     report = {
         "text_boxes": len(boxes),
         "line_features": len(line_features),

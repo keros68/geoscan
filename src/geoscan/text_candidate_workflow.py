@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from geoscan.candidates import feature_collection
+from geoscan.candidates import feature_collection, write_json as _write_json
 from geoscan.extract_text import extract_text_region_candidates
 from geoscan.ocr import run_direct_ocr_on_raster, write_ocr_review_csv
 from geoscan.raster import load_rgb
@@ -105,11 +105,6 @@ def _run_direct_ocr_via_subprocess(
     if completed.returncode == 0 and report_path.is_file():
         result["ocr_report"] = json.loads(report_path.read_text(encoding="utf-8"))
     return result
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _feature_count(path: Path) -> int:

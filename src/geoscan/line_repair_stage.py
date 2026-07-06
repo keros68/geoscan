@@ -269,7 +269,7 @@ def generate_repaired_line_candidates(
         min_present_sides=4,
     )
     closures = find_axis_aligned_rectangle_closures(merged, **closure_kwargs)
-    closed = close_axis_aligned_rectangles(merged, **closure_kwargs)
+    closed = close_axis_aligned_rectangles(merged, closures=closures, **closure_kwargs)
     merged_keys = {_segment_key(segment) for segment in merged}
 
     counts = {
@@ -279,20 +279,23 @@ def generate_repaired_line_candidates(
         "closure_regularized": 0,
         "untouched_non_two_point": len(untouched_features),
     }
+    def _passthrough_clone(item: dict[str, Any], method: str) -> dict[str, Any]:
+        # Shallow rebuild with a fresh properties dict: only the properties are
+        # annotated, so the (potentially large) geometry is shared by reference
+        # instead of a full JSON round trip per feature.
+        properties = dict(item.get("properties") or {})
+        properties["repair_method"] = method
+        properties["needs_review"] = False
+        return {**item, "properties": properties}
+
     output_features: list[dict[str, Any]] = []
     for item in untouched_features:
-        clone = json.loads(json.dumps(item, ensure_ascii=False))
-        clone.setdefault("properties", {})["repair_method"] = "passthrough_untouched"
-        clone["properties"]["needs_review"] = False
-        output_features.append(clone)
+        output_features.append(_passthrough_clone(item, "passthrough_untouched"))
 
     for segment in closed:
         key = _segment_key(segment)
         if key in raw_keys:
-            clone = json.loads(json.dumps(raw_by_key[key], ensure_ascii=False))
-            clone.setdefault("properties", {})["repair_method"] = "passthrough"
-            clone["properties"]["needs_review"] = False
-            output_features.append(clone)
+            output_features.append(_passthrough_clone(raw_by_key[key], "passthrough"))
             counts["passthrough"] += 1
         elif key in merged_keys:
             if key in small_only_keys:

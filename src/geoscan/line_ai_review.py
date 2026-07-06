@@ -16,10 +16,10 @@ repaired layer:
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .candidates import utc_now as _utc_now
 from .ai_vision_review import (
     AiVisionConfig,
     UrlopenCallable,
@@ -36,10 +36,6 @@ from .ai_vision_review import (
 
 REVIEW_DIR_NAME = "AI_LINE_REVIEW"
 VALID_SUGGESTIONS = {"accept", "reject", "unsure"}
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def build_repaired_line_review_prompt(

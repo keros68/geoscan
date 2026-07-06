@@ -140,21 +140,31 @@ textarea {
   border-bottom: 1px solid var(--border);
   padding: 6px 10px;
   flex: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
 }
 
 .toolbar .spring {
-  flex: 1;
+  flex: 1 0 12px;
+  min-width: 12px;
 }
 
 .toolbar .workspace {
   font-family: var(--mono);
   font-size: 12px;
   color: var(--ink-muted);
+  flex: 0 1 260px;
+  min-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .tool-sep {
   width: 1px;
+  flex: 0 0 1px;
   height: 20px;
   background: var(--border);
   margin: 0 4px;
@@ -172,7 +182,12 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
   transition: background 150ms, border-color 150ms, transform 100ms;
+}
+
+.toolbar .btn {
+  flex: 0 0 auto;
 }
 
 .btn:hover:not(:disabled) {
@@ -400,6 +415,22 @@ textarea {
   border-right: none;
   border-left: 1px solid var(--border);
   overflow-y: auto;
+}
+
+.inspector-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 32px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .center-pane {
@@ -842,6 +873,30 @@ textarea {
   margin-top: 4px;
 }
 
+.inspector .ai-panel {
+  display: block;
+  padding: 0;
+}
+
+.inspector .ai-form {
+  width: auto;
+}
+
+.inspector .ai-actions {
+  flex-direction: column;
+}
+
+.inspector .ai-actions .btn {
+  justify-content: center;
+}
+
+.inspector .ai-notes {
+  border-left: none;
+  padding-left: 0;
+  margin-top: 10px;
+  font-size: 11.2px;
+}
+
 .readiness.ready {
   background: var(--green-soft);
   color: var(--green);
@@ -959,6 +1014,52 @@ textarea {
   font-size: 12.5px;
   padding: 14px;
   line-height: 1.7;
+}
+
+.summary-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 12px 14px;
+  min-height: 100%;
+}
+
+.summary-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+  flex: 1;
+}
+
+.summary-stats div {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  background: var(--surface);
+  font-family: var(--mono);
+}
+
+.summary-stats span {
+  display: block;
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  margin-bottom: 4px;
+}
+
+.summary-stats b {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 160px;
+}
+
+.summary-actions .btn {
+  justify-content: center;
 }
 
 .batch-form {

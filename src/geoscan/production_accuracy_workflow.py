@@ -8,9 +8,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
-from geoscan.dxf_encoding import make_dxf_mapgis_chinese_compatible
+from geoscan.candidates import read_json as _read_json, write_json as _write_json
+from geoscan.dxf_encoding import make_dxf_mapgis_chinese_compatible, read_dxf_text
 from geoscan.dxf_style import PIXEL_TO_ORIGINAL_TIF_MM, mapgis_dxf_label_style
 from geoscan.grouped_exchange import grouped_exchange_path, safe_target_stem
 
@@ -175,13 +176,24 @@ def short_output_root_for_map_id(project_root: Path, map_id: str) -> Path:
     return Path(project_root) / f"{compact}_P"
 
 
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _scaled_xy(x: float, y: float, px_to_mm: tuple[float, float] | None) -> tuple[float, float]:
+    """Pixel map-space -> output units. ``px_to_mm=None`` keeps legacy pixel units."""
+    if px_to_mm is None:
+        return x, y
+    return x * px_to_mm[0], y * px_to_mm[1]
 
 
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+def _scale_geometry(geometry: dict[str, Any], px_to_mm: tuple[float, float] | None) -> dict[str, Any]:
+    if px_to_mm is None:
+        return geometry
+
+    def _scale(node: Any) -> Any:
+        if isinstance(node, (list, tuple)) and node and isinstance(node[0], (int, float)):
+            x, y = _scaled_xy(float(node[0]), float(node[1]), px_to_mm)
+            return [round(x, 6), round(y, 6)]
+        return [_scale(child) for child in node]
+
+    return {"type": geometry.get("type"), "coordinates": _scale(geometry.get("coordinates") or [])}
 
 
 def _feature_point(feature: dict[str, Any]) -> tuple[float, float]:
@@ -229,11 +241,12 @@ def _placeholder_feature(
     index: int,
     map_id: str,
     target_file: str,
+    px_to_mm: tuple[float, float] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     props = dict(feature.get("properties") or {})
     text, is_placeholder = _text_value(props, index)
     category = _clean_text(props.get("category") or props.get("text_role") or "uncertain_text")
-    x, y = _feature_point(feature)
+    x, y = _scaled_xy(*_feature_point(feature), px_to_mm)
     font_mm = _font_mm(category, text)
     candidate_id = _clean_text(props.get("candidate_id") or props.get("feature_id")) or f"{map_id}_TXT_{index:04d}"
     layer = _clean_text(props.get("suggested_layer")) or f"{map_id}_TEXT_PLACEHOLDER"
@@ -251,15 +264,17 @@ def _placeholder_feature(
         "text_route": TEXT_PLACEHOLDER_ROUTE,
         "native_wt_ready_for_acceptance": "no",
         "Note": "Text placeholder for manual correction; generated through SECTION/W60 DXF route.",
-        # This route keeps geometry in PIXEL units (1 px = 1 ground unit), so
-        # the label size must be font_mm converted to px (coordinate_scale=1).
-        # Passing PIXEL_TO_ORIGINAL_TIF_MM here cancelled the conversion and
-        # rendered every annotation ~12x too small.
+        # Label size follows the ground unit of this package. mm route
+        # (px_to_mm set): ground unit IS mm, so the label height is font_mm
+        # itself. Legacy pixel route (px_to_mm=None): font_mm must be converted
+        # to px — passing PIXEL_TO_ORIGINAL_TIF_MM as coordinate_scale there
+        # cancelled the conversion and rendered every annotation ~12x too small.
         "OGR_STYLE": mapgis_dxf_label_style(
             text,
             "SimSun",
             font_mm,
-            coordinate_scale=1.0,
+            coordinate_scale=px_to_mm[0] if px_to_mm is not None else 1.0,
+            final_mm_per_pixel=px_to_mm[0] if px_to_mm is not None else PIXEL_TO_ORIGINAL_TIF_MM,
         ),
     }
     return (
@@ -289,7 +304,9 @@ def _relative_exchange_text(path: Path, *, output_root: Path) -> str:
     return str(relative).replace("/", "\\")
 
 
-def _line_coordinates(feature: dict[str, Any]) -> list[list[float]] | None:
+def _line_coordinates(
+    feature: dict[str, Any], px_to_mm: tuple[float, float] | None
+) -> list[list[float]] | None:
     geometry = feature.get("geometry") or {}
     if geometry.get("type") != "LineString":
         return None
@@ -300,7 +317,8 @@ def _line_coordinates(feature: dict[str, Any]) -> list[list[float]] | None:
     for point in coordinates:
         if not isinstance(point, (list, tuple)) or len(point) < 2:
             return None
-        output.append([round(float(point[0]), 6), round(float(point[1]), 6)])
+        x, y = _scaled_xy(float(point[0]), float(point[1]), px_to_mm)
+        output.append([round(x, 6), round(y, 6)])
     return output
 
 
@@ -310,8 +328,9 @@ def _line_feature(
     index: int,
     map_id: str,
     target_file: str,
+    px_to_mm: tuple[float, float] | None = None,
 ) -> dict[str, Any] | None:
-    coordinates = _line_coordinates(feature)
+    coordinates = _line_coordinates(feature, px_to_mm)
     if coordinates is None:
         return None
     props = dict(feature.get("properties") or {})
@@ -343,6 +362,7 @@ def _area_feature(
     index: int,
     map_id: str,
     target_file: str,
+    px_to_mm: tuple[float, float] | None = None,
 ) -> dict[str, Any] | None:
     geometry = feature.get("geometry") or {}
     if geometry.get("type") not in {"Polygon", "MultiPolygon"}:
@@ -366,7 +386,7 @@ def _area_feature(
     return {
         "type": "Feature",
         "properties": output_props,
-        "geometry": geometry,
+        "geometry": _scale_geometry(geometry, px_to_mm),
     }
 
 
@@ -481,15 +501,6 @@ def _export_shapefile(
     }
 
 
-def _read_dxf_text(path: Path) -> str:
-    for encoding in ("utf-8", "gbk", "cp1252", "latin1"):
-        try:
-            return path.read_text(encoding=encoding)
-        except UnicodeDecodeError:
-            continue
-    return path.read_text(encoding="utf-8", errors="replace")
-
-
 def _first_dxf_value(entity: list[tuple[str, str]], code: str, default: str = "") -> str:
     for item_code, item_value in entity:
         if item_code == code:
@@ -542,7 +553,7 @@ def _legacy_text_entity_from_mtext(entity: list[tuple[str, str]]) -> list[tuple[
 def rewrite_dxf_mtext_entities_to_text(path: Path) -> dict[str, Any]:
     """Convert GDAL MTEXT labels into legacy TEXT entities for MapGIS/SECTION."""
     path = Path(path)
-    raw_lines = _read_dxf_text(path).splitlines()
+    raw_lines = read_dxf_text(path).splitlines()
     pairs: list[tuple[str, str]] = []
     index = 0
     while index < len(raw_lines):
@@ -617,6 +628,135 @@ Manual acceptance checklist:
     path.write_text(text, encoding="utf-8")
 
 
+def _build_exchange_package(
+    *,
+    source_geojson: Path,
+    output_root: Path,
+    map_id: str,
+    target_file: str,
+    do_export: bool,
+    ogr2ogr_path: Path | None,
+    gdal_data: Path | None,
+    px_to_mm: tuple[float, float] | None,
+    stage_dir_name: str,
+    manifest_kind: str,
+    manifest_extra: dict[str, Any] | None,
+    feature_mapper: Callable[..., dict[str, Any] | None],
+    exporter: Callable[..., dict[str, Any]],
+    require_features_for_export: bool,
+    empty_export_reason: str,
+    skipped_export_reason: str,
+    after_export: Callable[[dict[str, Any], Path], None] | None,
+    write_handoff_file: bool,
+) -> dict[str, Any]:
+    """Shared skeleton behind the three exchange-package writers below.
+
+    Resolves tool paths, lays out the stage dir, maps each source feature
+    through ``feature_mapper``, writes the FeatureCollection + the two
+    manifests, writes CONVERSION_LIST.txt (dxf routes via
+    ``_write_conversion_list``, the shp route inline -- same behavior as
+    before, just gated on ``manifest_kind``), optionally the text-route
+    handoff doc, then runs ``exporter`` gated by
+    ``require_features_for_export``. Returns the raw pieces; each public
+    wrapper below assembles its own report dict (key names/extras differ per
+    route) from what is returned here -- report shape is intentionally NOT
+    unified here, since the three routes' report keys genuinely differ.
+    """
+    ogr2ogr_path = resolve_ogr2ogr(ogr2ogr_path)
+    gdal_data = resolve_gdal_data(gdal_data)
+    output_root = Path(output_root)
+    source_geojson = Path(source_geojson)
+    stage_dir = output_root / stage_dir_name
+    grouped_sources = stage_dir / "grouped_sources"
+    grouped_exchange = stage_dir / "grouped_exchange"
+    section_batch = stage_dir / "section_batch"
+    ready_dir = output_root / "MAPGIS_READY"
+    target_stem = safe_target_stem(target_file)
+    output_source = grouped_sources / f"{target_stem}.geojson"
+    output_artifact = grouped_exchange_path(grouped_exchange, target_file)
+    conversion_list = stage_dir / "CONVERSION_LIST.txt"
+
+    payload = _read_json(source_geojson)
+    output_features: list[dict[str, Any]] = []
+    for index, feature in enumerate(payload.get("features", []), start=1):
+        output_feature = feature_mapper(feature, index=index, map_id=map_id, target_file=target_file)
+        if output_feature is not None:
+            output_features.append(output_feature)
+
+    _write_json(output_source, {"type": "FeatureCollection", "name": target_stem, "features": output_features})
+    source_manifest = {
+        target_file: {
+            "kind": manifest_kind,
+            "source": str(output_source),
+            "path": str(output_artifact),
+            "features": len(output_features),
+            **(manifest_extra or {}),
+        }
+    }
+    _write_json(grouped_sources / "manifest.json", source_manifest)
+    _write_json(grouped_exchange / "manifest.json", source_manifest)
+
+    if manifest_kind == "dxf":
+        _write_conversion_list(
+            conversion_list,
+            target_file=target_file,
+            dxf_path=output_artifact,
+            output_root=stage_dir,
+            count=len(output_features),
+        )
+    else:
+        conversion_list.write_text(
+            f"{target_file}\t{manifest_kind}\t"
+            f"{_relative_exchange_text(output_artifact, output_root=stage_dir)}\t{len(output_features)}\n",
+            encoding="utf-8",
+        )
+
+    handoff = stage_dir / "HANDOFF_NEXT_WINDOW.md" if write_handoff_file else None
+    if handoff is not None:
+        _write_handoff(
+            handoff,
+            output_root=output_root,
+            grouped_exchange_dir=grouped_exchange,
+            section_batch_dir=section_batch,
+            conversion_list=conversion_list,
+            ready_dir=ready_dir,
+            target_file=target_file,
+        )
+
+    if do_export and (output_features or not require_features_for_export):
+        export_report = exporter(
+            source_geojson=output_source,
+            artifact_path=output_artifact,
+            ogr2ogr_path=ogr2ogr_path,
+            gdal_data=gdal_data,
+        )
+        if after_export is not None:
+            after_export(export_report, output_artifact)
+    elif do_export:
+        export_report = {"status": "empty", "path": str(output_artifact), "reason": empty_export_reason}
+    else:
+        export_report = {"status": "skipped", "path": str(output_artifact), "reason": skipped_export_reason}
+
+    return {
+        "output_root": output_root,
+        "source_geojson_input": source_geojson,
+        "stage_dir": stage_dir,
+        "grouped_sources": grouped_sources,
+        "grouped_exchange": grouped_exchange,
+        "section_batch": section_batch,
+        "ready_dir": ready_dir,
+        "output_source": output_source,
+        "output_artifact": output_artifact,
+        "conversion_list": conversion_list,
+        "handoff": handoff,
+        "payload": payload,
+        "output_features": output_features,
+        "export_report": export_report,
+        "output_units": "mm" if px_to_mm is not None else "px",
+        "px_to_mm_scale": list(px_to_mm) if px_to_mm is not None else None,
+    }
+
+
 def write_text_placeholder_exchange_package(
     *,
     source_geojson: Path,
@@ -626,94 +766,69 @@ def write_text_placeholder_exchange_package(
     export_dxf: bool = True,
     ogr2ogr_path: Path | None = None,
     gdal_data: Path | None = None,
+    px_to_mm: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
-    ogr2ogr_path = resolve_ogr2ogr(ogr2ogr_path)
-    gdal_data = resolve_gdal_data(gdal_data)
-    output_root = Path(output_root)
-    source_geojson = Path(source_geojson)
-    text_dir = output_root / "07_TEXT_SECTION_W60"
-    grouped_sources = text_dir / "grouped_sources"
-    grouped_exchange = text_dir / "grouped_exchange"
-    section_batch = text_dir / "section_batch"
-    ready_dir = output_root / "MAPGIS_READY"
-    target_stem = safe_target_stem(target_file)
-    output_source = grouped_sources / f"{target_stem}.geojson"
-    output_dxf = grouped_exchange_path(grouped_exchange, target_file)
-    conversion_list = text_dir / "CONVERSION_LIST.txt"
-    handoff = text_dir / "HANDOFF_NEXT_WINDOW.md"
-
-    payload = _read_json(source_geojson)
-    output_features: list[dict[str, Any]] = []
     placeholder_count = 0
-    for index, feature in enumerate(payload.get("features", []), start=1):
+
+    def _map_feature(feature: dict[str, Any], *, index: int, map_id: str, target_file: str) -> dict[str, Any]:
+        nonlocal placeholder_count
         output_feature, is_placeholder = _placeholder_feature(
-            feature,
-            index=index,
-            map_id=map_id,
-            target_file=target_file,
+            feature, index=index, map_id=map_id, target_file=target_file, px_to_mm=px_to_mm
         )
-        output_features.append(output_feature)
         if is_placeholder:
             placeholder_count += 1
+        return output_feature
 
-    _write_json(output_source, {"type": "FeatureCollection", "name": target_stem, "features": output_features})
-    source_manifest = {
-        target_file: {
-            "kind": "dxf",
-            "source": str(output_source),
-            "path": str(output_dxf),
-            "features": len(output_features),
-        }
-    }
-    _write_json(grouped_sources / "manifest.json", source_manifest)
-    _write_json(grouped_exchange / "manifest.json", source_manifest)
-    _write_conversion_list(
-        conversion_list,
-        target_file=target_file,
-        dxf_path=output_dxf,
-        output_root=text_dir,
-        count=len(output_features),
-    )
-    _write_handoff(
-        handoff,
-        output_root=output_root,
-        grouped_exchange_dir=grouped_exchange,
-        section_batch_dir=section_batch,
-        conversion_list=conversion_list,
-        ready_dir=ready_dir,
-        target_file=target_file,
-    )
-
-    if export_dxf:
-        dxf_report = _export_dxf(
-            source_geojson=output_source,
-            dxf_path=output_dxf,
-            ogr2ogr_path=ogr2ogr_path,
-            gdal_data=gdal_data,
+    def _export(*, source_geojson: Path, artifact_path: Path, ogr2ogr_path: Path, gdal_data: Path) -> dict[str, Any]:
+        return _export_dxf(
+            source_geojson=source_geojson, dxf_path=artifact_path, ogr2ogr_path=ogr2ogr_path, gdal_data=gdal_data
         )
-        dxf_report["legacy_text_entities"] = rewrite_dxf_mtext_entities_to_text(output_dxf)
-    else:
-        dxf_report = {"status": "skipped", "path": str(output_dxf), "reason": "export_dxf_false"}
+
+    def _after_export(dxf_report: dict[str, Any], artifact_path: Path) -> None:
+        dxf_report["legacy_text_entities"] = rewrite_dxf_mtext_entities_to_text(artifact_path)
+
+    built = _build_exchange_package(
+        source_geojson=source_geojson,
+        output_root=output_root,
+        map_id=map_id,
+        target_file=target_file,
+        do_export=export_dxf,
+        ogr2ogr_path=ogr2ogr_path,
+        gdal_data=gdal_data,
+        px_to_mm=px_to_mm,
+        stage_dir_name="07_TEXT_SECTION_W60",
+        manifest_kind="dxf",
+        manifest_extra=None,
+        feature_mapper=_map_feature,
+        exporter=_export,
+        require_features_for_export=False,
+        empty_export_reason="",
+        skipped_export_reason="export_dxf_false",
+        after_export=_after_export,
+        write_handoff_file=True,
+    )
 
     report = {
         "route": TEXT_PLACEHOLDER_ROUTE,
         "native_wt_ready_for_acceptance": False,
-        "source_geojson_input": str(source_geojson),
-        "source_geojson": str(output_source),
+        "output_units": built["output_units"],
+        "px_to_mm_scale": built["px_to_mm_scale"],
+        "source_geojson_input": str(built["source_geojson_input"]),
+        "source_geojson": str(built["output_source"]),
         "target_file": target_file,
-        "output_root": str(output_root),
-        "grouped_sources_manifest": str(grouped_sources / "manifest.json"),
-        "grouped_exchange_manifest": str(grouped_exchange / "manifest.json"),
-        "grouped_exchange_dir": str(grouped_exchange),
-        "section_batch_dir": str(section_batch),
-        "conversion_list": str(conversion_list),
-        "handoff": str(handoff),
-        "source_text_count": len(payload.get("features", [])),
-        "output_text_count": len(output_features),
+        "output_root": str(built["output_root"]),
+        "grouped_sources_manifest": str(built["grouped_sources"] / "manifest.json"),
+        "grouped_exchange_manifest": str(built["grouped_exchange"] / "manifest.json"),
+        "grouped_exchange_dir": str(built["grouped_exchange"]),
+        "section_batch_dir": str(built["section_batch"]),
+        "conversion_list": str(built["conversion_list"]),
+        "handoff": str(built["handoff"]),
+        "source_text_count": len(built["payload"].get("features", [])),
+        "output_text_count": len(built["output_features"]),
         "placeholder_text_count": placeholder_count,
-        "dxf_export": dxf_report,
+        "dxf_export": built["export_report"],
     }
-    _write_json(text_dir / "TEXT_PLACEHOLDER_PACKAGE_REPORT.json", report)
+    _write_json(built["stage_dir"] / "TEXT_PLACEHOLDER_PACKAGE_REPORT.json", report)
     return report
 
 
@@ -726,82 +841,57 @@ def write_line_exchange_package(
     export_dxf: bool = True,
     ogr2ogr_path: Path | None = None,
     gdal_data: Path | None = None,
+    px_to_mm: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
-    ogr2ogr_path = resolve_ogr2ogr(ogr2ogr_path)
-    gdal_data = resolve_gdal_data(gdal_data)
-    output_root = Path(output_root)
-    source_geojson = Path(source_geojson)
-    line_dir = output_root / "06_LINE_SECTION_W60"
-    grouped_sources = line_dir / "grouped_sources"
-    grouped_exchange = line_dir / "grouped_exchange"
-    section_batch = line_dir / "section_batch"
-    ready_dir = output_root / "MAPGIS_READY"
-    target_stem = safe_target_stem(target_file)
-    output_source = grouped_sources / f"{target_stem}.geojson"
-    output_dxf = grouped_exchange_path(grouped_exchange, target_file)
-    conversion_list = line_dir / "CONVERSION_LIST.txt"
+    def _map_feature(feature: dict[str, Any], *, index: int, map_id: str, target_file: str) -> dict[str, Any] | None:
+        return _line_feature(feature, index=index, map_id=map_id, target_file=target_file, px_to_mm=px_to_mm)
 
-    payload = _read_json(source_geojson)
-    output_features: list[dict[str, Any]] = []
-    for index, feature in enumerate(payload.get("features", []), start=1):
-        output_feature = _line_feature(
-            feature,
-            index=index,
-            map_id=map_id,
-            target_file=target_file,
+    def _export(*, source_geojson: Path, artifact_path: Path, ogr2ogr_path: Path, gdal_data: Path) -> dict[str, Any]:
+        return _export_dxf(
+            source_geojson=source_geojson, dxf_path=artifact_path, ogr2ogr_path=ogr2ogr_path, gdal_data=gdal_data
         )
-        if output_feature is not None:
-            output_features.append(output_feature)
 
-    _write_json(output_source, {"type": "FeatureCollection", "name": target_stem, "features": output_features})
-    source_manifest = {
-        target_file: {
-            "kind": "dxf",
-            "source": str(output_source),
-            "path": str(output_dxf),
-            "features": len(output_features),
-        }
-    }
-    _write_json(grouped_sources / "manifest.json", source_manifest)
-    _write_json(grouped_exchange / "manifest.json", source_manifest)
-    _write_conversion_list(
-        conversion_list,
+    built = _build_exchange_package(
+        source_geojson=source_geojson,
+        output_root=output_root,
+        map_id=map_id,
         target_file=target_file,
-        dxf_path=output_dxf,
-        output_root=line_dir,
-        count=len(output_features),
+        do_export=export_dxf,
+        ogr2ogr_path=ogr2ogr_path,
+        gdal_data=gdal_data,
+        px_to_mm=px_to_mm,
+        stage_dir_name="06_LINE_SECTION_W60",
+        manifest_kind="dxf",
+        manifest_extra=None,
+        feature_mapper=_map_feature,
+        exporter=_export,
+        require_features_for_export=True,
+        empty_export_reason="no_line_features",
+        skipped_export_reason="export_dxf_false",
+        after_export=None,
+        write_handoff_file=False,
     )
-
-    if export_dxf and output_features:
-        dxf_report = _export_dxf(
-            source_geojson=output_source,
-            dxf_path=output_dxf,
-            ogr2ogr_path=ogr2ogr_path,
-            gdal_data=gdal_data,
-        )
-    elif export_dxf:
-        dxf_report = {"status": "empty", "path": str(output_dxf), "reason": "no_line_features"}
-    else:
-        dxf_report = {"status": "skipped", "path": str(output_dxf), "reason": "export_dxf_false"}
 
     report = {
         "route": LINE_EXCHANGE_ROUTE,
         "native_wl_ready_for_acceptance": False,
-        "source_geojson_input": str(source_geojson),
-        "source_geojson": str(output_source),
+        "output_units": built["output_units"],
+        "px_to_mm_scale": built["px_to_mm_scale"],
+        "source_geojson_input": str(built["source_geojson_input"]),
+        "source_geojson": str(built["output_source"]),
         "target_file": target_file,
-        "output_root": str(output_root),
-        "grouped_sources_manifest": str(grouped_sources / "manifest.json"),
-        "grouped_exchange_manifest": str(grouped_exchange / "manifest.json"),
-        "grouped_exchange_dir": str(grouped_exchange),
-        "section_batch_dir": str(section_batch),
-        "conversion_list": str(conversion_list),
-        "ready_dir": str(ready_dir),
-        "source_line_count": len(payload.get("features", [])),
-        "output_line_count": len(output_features),
-        "dxf_export": dxf_report,
+        "output_root": str(built["output_root"]),
+        "grouped_sources_manifest": str(built["grouped_sources"] / "manifest.json"),
+        "grouped_exchange_manifest": str(built["grouped_exchange"] / "manifest.json"),
+        "grouped_exchange_dir": str(built["grouped_exchange"]),
+        "section_batch_dir": str(built["section_batch"]),
+        "conversion_list": str(built["conversion_list"]),
+        "ready_dir": str(built["ready_dir"]),
+        "source_line_count": len(built["payload"].get("features", [])),
+        "output_line_count": len(built["output_features"]),
+        "dxf_export": built["export_report"],
     }
-    _write_json(line_dir / "LINE_EXCHANGE_PACKAGE_REPORT.json", report)
+    _write_json(built["stage_dir"] / "LINE_EXCHANGE_PACKAGE_REPORT.json", report)
     return report
 
 
@@ -814,83 +904,62 @@ def write_area_exchange_package(
     export_shp: bool = True,
     ogr2ogr_path: Path | None = None,
     gdal_data: Path | None = None,
+    px_to_mm: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
-    ogr2ogr_path = resolve_ogr2ogr(ogr2ogr_path)
-    gdal_data = resolve_gdal_data(gdal_data)
-    output_root = Path(output_root)
-    source_geojson = Path(source_geojson)
-    area_dir = output_root / "07_AREA_SECTION_W60"
-    grouped_sources = area_dir / "grouped_sources"
-    grouped_exchange = area_dir / "grouped_exchange"
-    section_batch = area_dir / "section_batch"
-    ready_dir = output_root / "MAPGIS_READY"
-    target_stem = safe_target_stem(target_file)
-    output_source = grouped_sources / f"{target_stem}.geojson"
-    output_shp = grouped_exchange_path(grouped_exchange, target_file)
-    conversion_list = area_dir / "CONVERSION_LIST.txt"
+    def _map_feature(feature: dict[str, Any], *, index: int, map_id: str, target_file: str) -> dict[str, Any] | None:
+        return _area_feature(feature, index=index, map_id=map_id, target_file=target_file, px_to_mm=px_to_mm)
 
-    payload = _read_json(source_geojson)
-    output_features: list[dict[str, Any]] = []
-    for index, feature in enumerate(payload.get("features", []), start=1):
-        output_feature = _area_feature(
-            feature,
-            index=index,
-            map_id=map_id,
-            target_file=target_file,
+    def _export(*, source_geojson: Path, artifact_path: Path, ogr2ogr_path: Path, gdal_data: Path) -> dict[str, Any]:
+        return _export_shapefile(
+            source_geojson=source_geojson, shp_path=artifact_path, ogr2ogr_path=ogr2ogr_path, gdal_data=gdal_data
         )
-        if output_feature is not None:
-            output_features.append(output_feature)
 
-    _write_json(output_source, {"type": "FeatureCollection", "name": target_stem, "features": output_features})
-    source_manifest = {
-        target_file: {
-            "kind": "shp",
-            "source": str(output_source),
-            "path": str(output_shp),
-            "features": len(output_features),
-            "optional": True,
-        }
-    }
-    _write_json(grouped_sources / "manifest.json", source_manifest)
-    _write_json(grouped_exchange / "manifest.json", source_manifest)
-    conversion_list.write_text(
-        f"{target_file}\tshp\t{_relative_exchange_text(output_shp, output_root=area_dir)}\t{len(output_features)}\n",
-        encoding="utf-8",
+    def _after_export(shp_report: dict[str, Any], artifact_path: Path) -> None:
+        shp_report["prj_removed"] = bool(shp_report.get("prj_removed")) or _remove_shapefile_prj(artifact_path)
+
+    built = _build_exchange_package(
+        source_geojson=source_geojson,
+        output_root=output_root,
+        map_id=map_id,
+        target_file=target_file,
+        do_export=export_shp,
+        ogr2ogr_path=ogr2ogr_path,
+        gdal_data=gdal_data,
+        px_to_mm=px_to_mm,
+        stage_dir_name="07_AREA_SECTION_W60",
+        manifest_kind="shp",
+        manifest_extra={"optional": True},
+        feature_mapper=_map_feature,
+        exporter=_export,
+        require_features_for_export=True,
+        empty_export_reason="no_area_features",
+        skipped_export_reason="export_shp_false",
+        after_export=_after_export,
+        write_handoff_file=False,
     )
-
-    if export_shp and output_features:
-        shp_report = _export_shapefile(
-            source_geojson=output_source,
-            shp_path=output_shp,
-            ogr2ogr_path=ogr2ogr_path,
-            gdal_data=gdal_data,
-        )
-        shp_report["prj_removed"] = bool(shp_report.get("prj_removed")) or _remove_shapefile_prj(output_shp)
-    elif export_shp:
-        shp_report = {"status": "empty", "path": str(output_shp), "reason": "no_area_features"}
-    else:
-        shp_report = {"status": "skipped", "path": str(output_shp), "reason": "export_shp_false"}
 
     report = {
         "route": AREA_EXCHANGE_ROUTE,
         "native_wp_ready_for_acceptance": False,
         "optional": True,
-        "source_geojson_input": str(source_geojson),
-        "source_geojson": str(output_source),
+        "output_units": built["output_units"],
+        "px_to_mm_scale": built["px_to_mm_scale"],
+        "source_geojson_input": str(built["source_geojson_input"]),
+        "source_geojson": str(built["output_source"]),
         "target_file": target_file,
-        "output_root": str(output_root),
-        "grouped_sources_manifest": str(grouped_sources / "manifest.json"),
-        "grouped_exchange_manifest": str(grouped_exchange / "manifest.json"),
-        "grouped_exchange_dir": str(grouped_exchange),
-        "section_batch_dir": str(section_batch),
-        "conversion_list": str(conversion_list),
-        "ready_dir": str(ready_dir),
-        "source_area_count": len(payload.get("features", [])),
-        "output_area_count": len(output_features),
-        "shp_export": shp_report,
+        "output_root": str(built["output_root"]),
+        "grouped_sources_manifest": str(built["grouped_sources"] / "manifest.json"),
+        "grouped_exchange_manifest": str(built["grouped_exchange"] / "manifest.json"),
+        "grouped_exchange_dir": str(built["grouped_exchange"]),
+        "section_batch_dir": str(built["section_batch"]),
+        "conversion_list": str(built["conversion_list"]),
+        "ready_dir": str(built["ready_dir"]),
+        "source_area_count": len(built["payload"].get("features", [])),
+        "output_area_count": len(built["output_features"]),
+        "shp_export": built["export_report"],
         "note": "Optional WP area exchange package; not accepted until MapGIS/W60 visual review passes.",
     }
-    _write_json(area_dir / "AREA_EXCHANGE_PACKAGE_REPORT.json", report)
+    _write_json(built["stage_dir"] / "AREA_EXCHANGE_PACKAGE_REPORT.json", report)
     return report
 
 

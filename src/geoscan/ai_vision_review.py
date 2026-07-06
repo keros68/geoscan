@@ -12,6 +12,8 @@ from typing import Any, Callable
 
 from PIL import Image
 
+from geoscan.candidates import write_json as _write_json
+
 
 class AiVisionError(RuntimeError):
     pass
@@ -167,11 +169,6 @@ def _normalize_analysis(payload: Any, *, map_id: str) -> dict[str, Any]:
         "text_strategy": _normalize_string_list(payload.get("text_strategy")),
         "risks": _normalize_string_list(payload.get("risks")),
     }
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _image_data_url(path: Path) -> str:

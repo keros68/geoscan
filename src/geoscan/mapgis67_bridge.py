@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from geoscan.candidates import read_json as _read_json, write_json as _write_json
 from geoscan.env_probe import program_candidates
 from geoscan.section_batch import prepare_section_batch_input
 from geoscan.section_collect import (
@@ -53,15 +54,6 @@ class SectionAutomationError(RuntimeError):
         super().__init__(message)
         self.stage = stage
         self.diagnostics = diagnostics or {}
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _resolve_section_exe(section_exe: Path | None) -> tuple[Path, list[str]]:

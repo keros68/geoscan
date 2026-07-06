@@ -15,16 +15,15 @@ Releases → 客户端自动升级」的外层流程。
 
 客户端自动升级的**程序侧**逻辑不在本目录，而在 `src/geoscan/updater.py`
 （对 GitHub Releases 的 `releases/latest` 查询 / 下载 / 校验 / 换装），由
-新控制台（engine_host 的 `check_update`/`apply_engine_update` 命令）和经典
-GUI 的「检查更新」按钮共同复用。测试见 `tests/test_updater.py`。
+控制台（engine_host 的 `check_update`/`apply_engine_update` 命令）使用。
+测试见 `tests/test_updater.py`。
 
-## 0.2.0 起的双界面布局
-
-安装目录内并存两个界面，共享同一个冻结 Python 运行时与两层更新：
+## 安装布局（唯一界面：控制台；经典 tkinter 界面已移除）
 
 ```
-GeoScanConsole.exe   主界面（Tauri/React 控制台；开始菜单/桌面快捷方式指向它）
-GeoScan.exe          经典 tkinter 界面（保留一个版本线作后备入口）
+GeoScanConsole.exe   界面（Tauri/React 控制台；开始菜单/桌面快捷方式指向它）
+GeoScan.exe          引擎载体，本身没有界面（--engine/--batch/--check；
+                     双击会转而拉起旁边的 GeoScanConsole.exe）
 GeoScan.exe --engine 控制台后台引擎（JSONL over stdio；控制台自动拉起，用户不用管）
 _internal\           冻结运行时 + engine\ 松散 geoscan 代码（引擎 zip 更新的目标）
 gdal\                自带 ogr2ogr
@@ -38,7 +37,8 @@ geoscan.engine_host`（`tauri dev` 回退）。**构建机需要 Node + Rust(MSV
 轻量引擎更新对控制台同样生效：`apply_engine_update` 换掉 `_internal/engine/`
 后控制台只重启引擎进程，窗口不动；整包更新则由控制台下载安装器、自动关窗交给
 Inno（`CloseApplications=yes` 兜底）。终端用户机器需要 WebView2 运行库
-（Win11 自带；安装器检测缺失时提示，不阻塞——经典界面不依赖它）。
+（Win11 自带；安装器检测缺失时提示，不阻塞——但控制台是唯一界面，没有
+WebView2 界面就打不开，需在首次使用前装好）。
 
 ## 构建安装包（Phase 0）
 
@@ -51,11 +51,11 @@ release\build_clean.ps1 -Recreate       # 从零重建 venv（换依赖版本时
 release\trim_gdal.ps1                    # 闭包安全，只删导入闭包外的 DLL
 
 # 3. 出安装包（需先装 Inno Setup 6，用 ISCC 编译）
-ISCC release\installer\installer.iss     # 产出 dist\installer\MapGISVectorizeSetup.exe
+ISCC release\installer\installer.iss     # 产出 dist\installer\GeoScanSetup.exe
 ```
 
-安装后：程序装在 `C:\Program Files\MapGISVectorize\`（纯 ASCII，GDAL 友好），
-用户配置写在 `%LOCALAPPDATA%\MapGISVectorize\config\`，**升级/卸载都不动它**。
+安装后：程序默认装在 `%LOCALAPPDATA%\Programs\GeoScan\`（无需管理员权限），
+用户配置写在 `%LOCALAPPDATA%\GeoScan\config\`，**升级/卸载都不动它**。
 这正是就地自动升级安全的原因：升级器重跑安装包，用户的工具路径 + API Key 都保留。
 
 ## 两层更新模型

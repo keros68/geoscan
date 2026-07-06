@@ -1,4 +1,5 @@
-# PyInstaller spec for the standalone MapGIS semi-auto vectorization GUI.
+# PyInstaller spec for the frozen GeoScan engine executable (GeoScan.exe:
+# --engine / --check / --batch; the UI is the separately built GeoScanConsole.exe).
 # Build from the repo root:
 #   pyinstaller packaging/GeoScan.spec --noconfirm
 # Output: dist/GeoScan/ (one-folder; copy the whole folder).
@@ -40,7 +41,6 @@ def _is_public(module_name):
 # in-process OCR route in text_candidate_workflow picks it up automatically.
 rapidocr_datas, rapidocr_binaries, rapidocr_hidden = collect_all("rapidocr")
 ort_datas, ort_binaries, ort_hidden = collect_all("onnxruntime")
-svttk_datas, svttk_binaries, svttk_hidden = collect_all("sv_ttk")
 # opencv (cv2): opencv 4.13's __init__.py imports the native cv2.pyd through a
 # runtime bootstrap that PyInstaller's static analysis cannot see, and .pyd is
 # not in collect_dynamic_libs' default patterns -> the extension is dropped and
@@ -114,7 +114,6 @@ a = Analysis(
         *engine_datas,
         *rapidocr_datas,
         *ort_datas,
-        *svttk_datas,
         *cv2_datas,
     ],
     hiddenimports=[
@@ -122,8 +121,6 @@ a = Analysis(
         # imports are covered regardless of the static import graph. Private
         # modules are filtered out so they never enter the shipped installer.
         *[m for m in collect_submodules("geoscan") if _is_public(m)],
-        "PIL._tkinter_finder",
-        "sv_ttk",
         # numpy 2.x compat shims: cv2's wrapper does `import numpy.core.multiarray`
         # at runtime, invisible to static analysis when cv2 ships as loose source.
         # Missing them -> "No module named 'numpy.core.multiarray'" in the frozen app.
@@ -131,7 +128,6 @@ a = Analysis(
         "numpy.core.umath",
         *rapidocr_hidden,
         *ort_hidden,
-        *svttk_hidden,
         *cv2_hidden,
     ],
     hookspath=[],
@@ -170,7 +166,7 @@ exe = EXE(
     debug=False,
     strip=False,
     upx=False,
-    console=False,  # windowed app: no cmd window on launch (GUI has its own log pane)
+    console=False,  # windowed exe: no cmd window flashes when the console spawns --engine
     icon=str(repo_root / "packaging" / "app_icon.ico"),
 )
 

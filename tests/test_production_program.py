@@ -141,7 +141,6 @@ def test_program_cli_safe_defaults():
     assert args.ai_provider == "none"
     assert args.conversion_mode == "prepare"
     assert args.include_areas is False
-    assert args.computer_use_allowed is False
 
 
 def test_program_creates_fresh_run_package_without_ai_or_computer_use(tmp_path):
@@ -179,7 +178,9 @@ def test_program_creates_fresh_run_package_without_ai_or_computer_use(tmp_path):
     frozen_manifest = output_root / "00_INPUT_FREEZE" / "INPUT_MANIFEST.json"
     pixel_unit_raster = output_root / "00_INPUT_FREEZE" / "t01_0099_mapgis_pixel_units.tif"
     raster_alignment_report = output_root / "00_INPUT_FREEZE" / "RASTER_ALIGNMENT_REPORT.json"
-    load_ready_raster = output_root / "MAPGIS_LOAD_READY" / "t01_0099_mapgis_pixel_units.tif"
+    load_ready_raster = output_root / "MAPGIS_LOAD_READY" / "t01_0099_source_frozen.tif"
+    load_ready_world = output_root / "MAPGIS_LOAD_READY" / "t01_0099_source_frozen.tfw"
+    load_ready_geojson = output_root / "MAPGIS_LOAD_READY" / "T99TXT_WT.geojson"
     load_ready_readme = output_root / "MAPGIS_LOAD_READY" / "README_MAPGIS_LOAD.md"
     run_report = output_root / "PROGRAM_RUN_REPORT.json"
     readme = output_root / "WORKFLOW_PROGRAM_README.md"
@@ -189,6 +190,8 @@ def test_program_creates_fresh_run_package_without_ai_or_computer_use(tmp_path):
     assert pixel_unit_raster.exists()
     assert raster_alignment_report.exists()
     assert load_ready_raster.exists()
+    assert load_ready_world.exists()
+    assert load_ready_geojson.exists()
     assert load_ready_readme.exists()
     assert run_report.exists()
     assert readme.exists()
@@ -196,15 +199,31 @@ def test_program_creates_fresh_run_package_without_ai_or_computer_use(tmp_path):
     with Image.open(pixel_unit_raster) as image:
         assert image.size == (16, 10)
         assert image.info["dpi"] == (25.4, 25.4)
+    # Deliverable raster keeps the source dpi so MapGIS shows it at sheet size.
+    with Image.open(load_ready_raster) as image:
+        assert image.size == (16, 10)
+        assert image.info["dpi"] == (300.0, 300.0)
 
     saved_report = json.loads(run_report.read_text(encoding="utf-8"))
     assert saved_report["output_root"] == str(output_root)
     assert saved_report["raster_alignment"]["target_dpi"] == [25.4, 25.4]
     assert saved_report["raster_alignment"]["pixel_unit_extent"] == [0.0, 0.0, 16.0, 10.0]
-    assert "do not use the original 300 dpi TIFF" in saved_report["raster_alignment"]["mapgis_import_note"]
+    assert saved_report["raster_alignment"]["export_units"] == "mm"
+    assert saved_report["raster_alignment"]["px_to_mm_scale"] == [0.08466667, 0.08466667]
+    assert saved_report["text"]["output_units"] == "mm"
     assert saved_report["mapgis_load_ready"]["load_folder"] == str(output_root / "MAPGIS_LOAD_READY")
     assert saved_report["mapgis_load_ready"]["raster"]["destination"] == str(load_ready_raster)
-    assert "mapgis_pixel_units.tif" in load_ready_readme.read_text(encoding="utf-8")
+    # Exported text point 120,88 px -> mm at 300 dpi.
+    text_geojson = json.loads(load_ready_geojson.read_text(encoding="utf-8"))
+    title = text_geojson["features"][0]["geometry"]["coordinates"]
+    assert title == [round(120.0 * 25.4 / 300.0, 6), round(88.0 * 25.4 / 300.0, 6)]
+    # World file: sheet-mm, y up, origin bottom-left (center-of-pixel anchors).
+    world_lines = load_ready_world.read_text(encoding="ascii").splitlines()
+    assert float(world_lines[0]) == pytest.approx(25.4 / 300.0)
+    assert float(world_lines[3]) == pytest.approx(-25.4 / 300.0)
+    assert float(world_lines[4]) == pytest.approx(0.5 * 25.4 / 300.0)
+    assert float(world_lines[5]) == pytest.approx((10 - 0.5) * 25.4 / 300.0)
+    assert "source_frozen.tif" in load_ready_readme.read_text(encoding="utf-8")
     assert "python -m geoscan.production_program run" in readme.read_text(
         encoding="utf-8"
     )
@@ -634,6 +653,112 @@ def test_main_returns_normally_when_conversion_not_requested(monkeypatch, tmp_pa
             "T01_0001",
         ]
     )
+
+
+def test_line_exchange_package_scales_px_to_mm(tmp_path):
+    from geoscan.production_accuracy_workflow import write_line_exchange_package
+
+    source = tmp_path / "lines.geojson"
+    source.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"candidate_id": "L1"},
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": [[0.0, 0.0], [300.0, 600.0]],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    scale = 25.4 / 300.0
+    report = write_line_exchange_package(
+        source_geojson=source,
+        output_root=tmp_path / "out",
+        map_id="T01_0001",
+        target_file="T01LINE.WL",
+        export_dxf=False,
+        px_to_mm=(scale, scale),
+    )
+
+    assert report["output_units"] == "mm"
+    assert report["px_to_mm_scale"] == [scale, scale]
+    payload = json.loads(Path(report["source_geojson"]).read_text(encoding="utf-8"))
+    coords = payload["features"][0]["geometry"]["coordinates"]
+    assert coords == [[0.0, 0.0], [round(300.0 * scale, 6), round(600.0 * scale, 6)]]
+
+
+def test_text_placeholder_scales_point_and_label_to_mm():
+    from geoscan.production_accuracy_workflow import _placeholder_feature
+
+    scale = 25.4 / 300.0
+    placeholder, _ = _placeholder_feature(
+        {
+            "type": "Feature",
+            "properties": {"ocr_text": "比例尺"},
+            "geometry": {"type": "Point", "coordinates": [300.0, 600.0]},
+        },
+        index=1,
+        map_id="T99_TEST",
+        target_file="T99TXT.WT",
+        px_to_mm=(scale, scale),
+    )
+
+    assert placeholder["geometry"]["coordinates"] == [
+        round(300.0 * scale, 6),
+        round(600.0 * scale, 6),
+    ]
+    # mm route: label height is the physical font size itself (1.8 mm), not px.
+    assert "s:1.800000g" in placeholder["properties"]["OGR_STYLE"]
+
+
+def test_load_ready_writes_world_files_and_qgis_geojson(tmp_path):
+    from geoscan.production_program import _staging_ready_dir, _write_mapgis_load_ready
+
+    output_root = tmp_path / "T01_0001_P"
+    _staging_ready_dir(output_root).mkdir(parents=True)
+    raster = tmp_path / "t01_0001_source_frozen.tif"
+    raster.write_bytes(b"tif")
+    line_geojson = tmp_path / "T01LINE.geojson"
+    line_geojson.write_text("{}", encoding="utf-8")
+
+    scale = 25.4 / 300.0
+    report = _write_mapgis_load_ready(
+        output_root=output_root,
+        map_id="T01_0001",
+        raster_alignment={
+            "source_raster": str(raster),
+            "pixel_unit_raster": str(tmp_path / "absent_pixel_units.tif"),
+            "px_to_mm_scale": [scale, scale],
+            "source_size_px": [16, 10],
+        },
+        conversion_report={"mode": "none", "ok": None, "status": "not_requested"},
+        line_report={
+            "output_units": "mm",
+            "source_geojson": str(line_geojson),
+            "dxf_export": {"path": "", "status": "skipped"},
+        },
+    )
+
+    load_dir = output_root / "MAPGIS_LOAD_READY"
+    assert (load_dir / "t01_0001_source_frozen.tif").is_file()
+    world = load_dir / "t01_0001_source_frozen.tfw"
+    assert str(world) in report["world_files"]
+    lines = world.read_text(encoding="ascii").splitlines()
+    assert float(lines[0]) == pytest.approx(scale)
+    assert float(lines[1]) == 0.0 and float(lines[2]) == 0.0
+    assert float(lines[3]) == pytest.approx(-scale)
+    assert float(lines[4]) == pytest.approx(0.5 * scale)
+    assert float(lines[5]) == pytest.approx(9.5 * scale)
+    assert (load_dir / "T01LINE.geojson").is_file()
+    assert report["qgis_files"][0]["kind"] == "line_geojson"
 
 
 def test_load_ready_marks_incomplete_when_cli_conversion_failed(tmp_path):

@@ -33,8 +33,7 @@ requests
 tqdm
 six
 
-# --- Windows / GUI / crypto ---
+# --- Windows / crypto ---
 pywin32          # win32crypt (DPAPI key), win32gui (SECTION bridge)
-sv-ttk           # Sun Valley theme
 lxml             # present in the working build; keep unless a build proves it unused
 cryptography     # Phase 2: verify the Ed25519-signed latest.json

@@ -19,7 +19,6 @@ dependencies = [
 [project.optional-dependencies]
 ocr = ["rapidocr", "onnxruntime"]
 mapgis = ["pywin32"]
-gui = ["sv-ttk"]
 dev = ["pytest"]
 
 [tool.setuptools.packages.find]

@@ -43,6 +43,7 @@ Python 应用后，追加 `npm run tauri build -- --no-bundle` 产出
 - 轻量更新：engine zip 换 `_internal/engine/` 里的 geoscan 源码 →
   控制台只重启引擎进程，窗口不中断（`apply_engine_update` 命令）。
 - 整包更新：控制台下载安装器、启动后自动关窗（`download_installer_update`）。
-- 经典 tkinter 界面与 `GeoScan.exe --batch` 保持可用（开始菜单“经典界面”）。
+- `GeoScan.exe --batch` 保持可用；`GeoScan.exe` 本身作为引擎载体，界面入口是
+  `GeoScanConsole.exe`。
 
-详见 `release/README.md` 的“0.2.0 起的双界面布局”。
+详见 `release/README.md` 的“安装布局”。

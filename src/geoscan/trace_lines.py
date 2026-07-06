@@ -87,7 +87,22 @@ def _neighbor_planes(img: np.ndarray) -> tuple[np.ndarray, ...]:
 
 def zhang_suen_thin(mask: np.ndarray, *, max_iterations: int = 64) -> np.ndarray:
     """Vectorized Zhang–Suen thinning to a (mostly) 1-px-wide skeleton."""
-    img = mask.astype(bool).copy()
+    full = mask.astype(bool)
+    ys, xs = np.nonzero(full)
+    if ys.size == 0:
+        return full.copy()
+    y0, y1 = int(ys.min()), int(ys.max())
+    x0, x1 = int(xs.min()), int(xs.max())
+    # Thinning only ever removes pixels (never adds them), so the foreground
+    # can only shrink toward the interior of its initial bounding box, never
+    # grow past it. Cropping to that bbox padded by 1px (clamped to the image
+    # edges) therefore stays valid for every iteration below: the 1px border
+    # is guaranteed background (by definition of the bbox) at image-interior
+    # edges, matching the constant_values=False padding _neighbor_planes
+    # already applies at the true image edges.
+    y0c, y1c = max(0, y0 - 1), min(full.shape[0] - 1, y1 + 1)
+    x0c, x1c = max(0, x0 - 1), min(full.shape[1] - 1, x1 + 1)
+    img = full[y0c : y1c + 1, x0c : x1c + 1].copy()
     for _ in range(int(max_iterations)):
         changed = False
         for step in (0, 1):
@@ -110,7 +125,9 @@ def zhang_suen_thin(mask: np.ndarray, *, max_iterations: int = 64) -> np.ndarray
                 changed = True
         if not changed:
             break
-    return img
+    out = np.zeros_like(full)
+    out[y0c : y1c + 1, x0c : x1c + 1] = img
+    return out
 
 
 _OFFSETS = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
@@ -128,7 +145,7 @@ def trace_skeleton_paths(skeleton: np.ndarray) -> list[list[tuple[int, int]]]:
     if not pixels:
         return []
 
-    def neighbors(pixel: tuple[int, int]) -> list[tuple[int, int]]:
+    def _neighbors_of(pixel: tuple[int, int]) -> list[tuple[int, int]]:
         # 8-connectivity, but prune diagonal shortcuts that are reachable via
         # an orthogonal neighbor: staircase skeletons otherwise form pixel
         # triangles that read as fake junctions and shred curves into chains.
@@ -143,7 +160,15 @@ def trace_skeleton_paths(skeleton: np.ndarray) -> list[list[tuple[int, int]]]:
             result.append(candidate)
         return result
 
-    degree = {pixel: len(neighbors(pixel)) for pixel in pixels}
+    # The pixel set never changes during tracing, so compute each pixel's
+    # neighbor list exactly once — walk() and the cycle pass otherwise redo
+    # the 8-way set probes for every path pixel (millions on a full map).
+    neighbor_map = {pixel: _neighbors_of(pixel) for pixel in pixels}
+
+    def neighbors(pixel: tuple[int, int]) -> list[tuple[int, int]]:
+        return neighbor_map[pixel]
+
+    degree = {pixel: len(neighbor_map[pixel]) for pixel in pixels}
     nodes = {pixel for pixel, count in degree.items() if count != 2}
 
     visited_edges: set[frozenset[tuple[int, int]]] = set()
@@ -183,7 +208,7 @@ def trace_skeleton_paths(skeleton: np.ndarray) -> list[list[tuple[int, int]]]:
         pixel for pixel in pixels if pixel not in consumed and degree[pixel] == 2
     }
     while remaining:
-        start = sorted(remaining)[0]
+        start = min(remaining)
         loop = [start]
         previous: tuple[int, int] | None = None
         current = start

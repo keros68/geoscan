@@ -20,8 +20,8 @@ Event    (stdout, no id — may arrive any time):
 
 Anything the pipeline prints to stdout is re-emitted as ``log`` events, so the
 protocol stream stays valid JSONL. Events never contain API keys (redacted at
-the source, same as the Tkinter GUI). All candidates stay checked=no; nothing
-here writes geological content.
+the source). All candidates stay checked=no; nothing here writes geological
+content.
 """
 
 from __future__ import annotations
@@ -46,13 +46,13 @@ from geoscan.app_settings import (
     settings_save_path,
 )
 from geoscan.batch_runner import discover_source_rasters
-from geoscan.production_gui import (
+from geoscan.run_form import (
     DEFAULT_LINE_CONNECT,
     DEFAULT_LINE_ENGINE,
     DEFAULT_LINE_EXPORT_SOURCE,
     DEFAULT_LINE_REPAIR,
     GuiFormState,
-    IMAGE_EXTENSIONS,
+    autodetect_tool_paths,
     build_ai_config_from_gui,
     build_batch_config_from_gui,
     build_program_config_from_gui,
@@ -61,13 +61,14 @@ from geoscan.production_gui import (
     default_output_root_from_parent,
     default_project_root,
     friendly_error_message,
+    invalid_settings_paths,
     run_notice_for_state,
+    validate_form_state,
 )
 from geoscan.production_program import (
     RunCancelledError,
     redact_api_key,
     run_production_program,
-    sanitize_map_id,
 )
 
 STAGES: tuple[tuple[str, str], ...] = (
@@ -180,82 +181,13 @@ def form_state_from_args(form: dict[str, Any]) -> GuiFormState:
         ai_enhance=bool(form.get("ai_enhance", False)),
         ocr_python=_opt_path("ocr_python"),
         export_dxf=bool(form.get("export_dxf", True)),
+        qgis_files=bool(form.get("qgis_files", True)),
         reset_output=bool(form.get("reset_output", False)),
         wait_timeout_seconds=int(form.get("wait_timeout_seconds") or 300),
         level_input=_s("level_input", "off") or "off",
         enhanced_preview=_s("enhanced_preview", "standard") or "standard",
+        skip_dongle_check=bool(form.get("skip_dongle_check", False)),
     )
-
-
-def missing_conversion_tools(settings: dict[str, str] | None = None) -> list[str]:
-    """Settings-first probe for SECTION/W60, mirroring the Tkinter GUI check."""
-    from geoscan.env_probe import program_candidates
-
-    settings = settings if settings is not None else read_machine_settings()
-    missing: list[str] = []
-    for key, program, label in (
-        ("section_exe", "section", "SECTION 程序 (section.exe)"),
-        ("w60_conv_exe", "w60_conv", "W60 转换程序 (W60_Conv.exe)"),
-    ):
-        configured = (settings.get(key) or os.environ.get(f"MAPGIS67_{program.upper()}_EXE", "")).strip()
-        if configured and Path(configured).is_file():
-            continue
-        if any(candidate.is_file() for candidate in program_candidates(program)):
-            continue
-        missing.append(label)
-    return missing
-
-
-def validate_form_state(state: GuiFormState) -> str | None:
-    """User-facing validation; same rules and wording as the Tkinter GUI."""
-    if not str(state.source_raster).strip() or not state.source_raster.is_file():
-        return "请选择存在的输入图片。"
-    if state.source_raster.suffix.lower() not in IMAGE_EXTENSIONS:
-        return "输入图片格式不在当前支持列表内。"
-    if not state.map_id:
-        return "请填写 Map ID，例如 T01_0006。"
-    if not sanitize_map_id(state.map_id):
-        return "Map ID 至少要包含一个字母或数字，例如 T01_0006 或 12345。"
-    if not str(state.output_parent).strip():
-        return "请选择输出父文件夹。"
-    if state.text_candidates is not None and not state.text_candidates.is_file():
-        return "文字候选 GeoJSON 不存在。"
-    if state.conversion_mode not in {"none", "prepare", "cli"}:
-        return "转换模式只能是 none、prepare 或 cli。"
-    if state.line_engine not in {"hough", "trace"}:
-        return "线提取引擎只能是 hough 或 trace。"
-    if state.line_connect not in {"conservative", "standard", "aggressive"}:
-        return "线条连接程度只能是 conservative、standard 或 aggressive。"
-    for label, value in (
-        ("桥接最大断口", state.line_bridge_gap_px),
-        ("闭合收口最大缺口", state.line_close_gap_px),
-    ):
-        if value is not None and value < 0:
-            return f"{label}不能为负数；填 0 表示关闭该功能。"
-    if state.level_input not in {"auto", "force", "off"}:
-        return "输入调平只能是 auto、force 或 off。"
-    if state.enhanced_preview not in {"none", "light", "standard", "strong"}:
-        return "增强底图只能是 none、light、standard 或 strong。"
-    if state.line_export_source == "repaired" and state.line_repair == "off":
-        return "导出线层选 repaired 时，必须同时把线修复设为 conservative（新鲜运行规则）。"
-    if state.ai_enhance and state.ai_provider == "none":
-        return "启用 AI 增强时，必须先在 AI 页选择 Provider 并填好 Key。"
-    if state.ai_enhance and not (state.ai_base_url and state.ai_api_key and state.ai_model):
-        return "启用 AI 增强时，AI 页的 Base URL / API Key / Model 都必须填写。"
-    if state.ai_enhance and state.line_repair == "off":
-        return "AI 增强在修复层上运行，必须同时把线修复设为 conservative。"
-    if state.line_export_source == "ai_enhanced" and not state.ai_enhance:
-        return "导出线层选 ai_enhanced 时，必须同时启用 AI 增强（新鲜运行规则）。"
-    if state.ocr_python is not None and not state.ocr_python.is_file():
-        return "OCR 解释器路径不存在；留空可自动探测。"
-    if state.conversion_mode == "cli":
-        missing = missing_conversion_tools()
-        if missing:
-            return (
-                f"转换模式 cli 需要本机的 {'、'.join(missing)}，但没有找到。"
-                "请在设置里点“自动探测本机程序”，或改用 none/prepare 只生成候选包。"
-            )
-    return None
 
 
 def stage_states_from_report(report: dict[str, Any], *, cancelled: bool = False) -> dict[str, str]:
@@ -297,7 +229,7 @@ def stage_states_from_report(report: dict[str, Any], *, cancelled: bool = False)
         mode = str(conversion.get("mode") or "")
         if status == "converted" and conversion.get("ok") is True:
             states["08_SECTION_W60"] = "completed"
-        elif status == "prepared" or mode in {"none", "prepare"} or status in {"not_requested", "no_text_package"}:
+        elif status == "prepared" or mode in {"none", "prepare"} or status == "not_requested":
             states["08_SECTION_W60"] = "skipped"
         else:
             states["08_SECTION_W60"] = "failed"
@@ -509,7 +441,13 @@ def _count_checked_yes(report: dict[str, Any]) -> int:
     return total
 
 
-def run_summary(output_root: Path) -> dict[str, Any]:
+def run_summary(output_root: Path, *, light: bool = False) -> dict[str, Any]:
+    """Summarize one run from its PROGRAM_RUN_REPORT.
+
+    ``light=True`` reads only the report itself — it skips the checked=yes
+    audit (which parses every candidate GeoJSON, tens of MB on big maps) and
+    the load-ready dir scan. Used by the history list, which needs neither.
+    """
     report_path = output_root / "PROGRAM_RUN_REPORT.json"
     if not report_path.is_file():
         return {"has_report": False}
@@ -524,7 +462,7 @@ def run_summary(output_root: Path) -> dict[str, Any]:
     load_ready = report.get("mapgis_load_ready") or {}
     load_folder = str(load_ready.get("load_folder") or "")
     ready_files: list[str] = []
-    if load_folder and Path(load_folder).is_dir():
+    if not light and load_folder and Path(load_folder).is_dir():
         ready_files = sorted(p.name for p in Path(load_folder).iterdir() if p.is_file())
 
     conversion = report.get("conversion") or {}
@@ -533,7 +471,7 @@ def run_summary(output_root: Path) -> dict[str, Any]:
     pixel_unit_raster = str((report.get("raster_alignment") or {}).get("pixel_unit_raster") or "")
     if pixel_unit_raster and not Path(pixel_unit_raster).is_file():
         pixel_unit_raster = ""
-    return {
+    summary = {
         "has_report": True,
         "kind": kind,
         "message": message,
@@ -546,9 +484,11 @@ def run_summary(output_root: Path) -> dict[str, Any]:
         "conversion_status": conversion.get("status") if isinstance(conversion, dict) else None,
         "load_folder": load_folder,
         "ready_files": ready_files,
-        "stage_states": stage_states_from_report(report),
-        "checked_yes": _count_checked_yes(report),
     }
+    if not light:
+        summary["stage_states"] = stage_states_from_report(report)
+        summary["checked_yes"] = _count_checked_yes(report)
+    return summary
 
 
 def list_history(parent: Path, limit: int = 20) -> list[dict[str, Any]]:
@@ -560,7 +500,7 @@ def list_history(parent: Path, limit: int = 20) -> list[dict[str, Any]]:
         if child.is_dir() and child.name.upper().endswith("_P") and (child / "PROGRAM_RUN_REPORT.json").is_file():
             candidates.append(((child / "PROGRAM_RUN_REPORT.json").stat().st_mtime, child))
     for mtime, child in sorted(candidates, reverse=True)[:limit]:
-        summary = run_summary(child)
+        summary = run_summary(child, light=True)
         rows.append(
             {
                 "output_root": str(child),
@@ -578,10 +518,12 @@ def list_history(parent: Path, limit: int = 20) -> list[dict[str, Any]]:
 
 def preflight(conversion_mode: str = "cli", export_dxf: bool = True) -> dict[str, Any]:
     from geoscan.env_probe import DONGLE_PROCESS_NAME, dongle_process_running, program_candidates
-    from geoscan.production_accuracy_workflow import resolve_gdal_data, resolve_ogr2ogr
+    from geoscan.production_accuracy_workflow import resolve_ogr2ogr
 
     settings = read_machine_settings()
     checks: list[dict[str, Any]] = []
+    needs_mapgis = conversion_mode == "cli"
+    conversion_needs_dxf = conversion_mode in {"cli", "prepare"}
 
     def _tool_state(key: str, program: str) -> tuple[str, str]:
         configured = (settings.get(key) or "").strip()
@@ -592,54 +534,69 @@ def preflight(conversion_mode: str = "cli", export_dxf: bool = True) -> dict[str
                 return "ok", str(candidate)
         return "missing", ""
 
-    section_state, section_path = _tool_state("section_exe", "section")
-    w60_state, w60_path = _tool_state("w60_conv_exe", "w60_conv")
-    needs_cli = conversion_mode == "cli"
-    checks.append(
-        {"key": "section", "label": "SECTION 程序", "state": section_state if needs_cli else ("ok" if section_state == "ok" else "warn"), "detail": section_path or "未找到；设置→自动探测本机程序"}
-    )
-    checks.append(
-        {"key": "w60", "label": "W60 转换程序", "state": w60_state if needs_cli else ("ok" if w60_state == "ok" else "warn"), "detail": w60_path or "未找到；设置→自动探测本机程序"}
-    )
+    if needs_mapgis:
+        section_state, section_path = _tool_state("section_exe", "section")
+        w60_state, w60_path = _tool_state("w60_conv_exe", "w60_conv")
+        checks.append(
+            {"key": "section", "label": "SECTION 程序", "state": section_state, "detail": section_path or "未找到；设置→自动探测本机程序"}
+        )
+        checks.append(
+            {"key": "w60", "label": "W60 转换程序", "state": w60_state, "detail": w60_path or "未找到；设置→自动探测本机程序"}
+        )
+    else:
+        section_state, w60_state = "skip", "skip"
+        checks.append(
+            {"key": "section", "label": "SECTION 程序", "state": "skip", "detail": "当前未请求 MapGIS WL/WT 输出"}
+        )
+        checks.append(
+            {"key": "w60", "label": "W60 转换程序", "state": "skip", "detail": "当前未请求 MapGIS WL/WT 输出"}
+        )
 
     ogr_state, ogr_detail = "missing", ""
-    try:
-        from geoscan.production_accuracy_workflow import bundled_gdal_dir
+    if conversion_needs_dxf and not export_dxf:
+        ogr_detail = "MapGIS/SECTION 转换依赖 DXF 输出；请打开 DXF，或关闭 MapGIS 转换"
+    elif export_dxf:
+        try:
+            from geoscan.production_accuracy_workflow import bundled_gdal_dir
 
-        ogr = Path(resolve_ogr2ogr())
-        if ogr.is_file():
-            ogr_state, ogr_detail = "ok", str(ogr)
-        else:
-            # Say WHAT was tried, so a remote screenshot is diagnosable:
-            # a stale configured path vs. a missing bundled gdal\ folder.
-            tried = [f"已试 {ogr}"]
-            if getattr(sys, "frozen", False) and bundled_gdal_dir() is None:
-                tried.append("安装目录缺少 gdal\\（重新安装可恢复）")
+            ogr = Path(resolve_ogr2ogr())
+            if ogr.is_file():
+                ogr_state, ogr_detail = "ok", str(ogr)
             else:
-                tried.append("到设置里选择本机 QGIS 的 ogr2ogr.exe，或清掉失效的旧路径")
-            ogr_detail = "未找到；" + "；".join(tried)
-    except Exception as exc:  # resolver may raise on odd setups
-        ogr_detail = str(exc)
-    if not export_dxf and ogr_state != "ok":
-        ogr_state = "warn"
+                # Say WHAT was tried, so a remote screenshot is diagnosable:
+                # a stale configured path vs. a missing bundled gdal\ folder.
+                tried = [f"已试 {ogr}"]
+                if getattr(sys, "frozen", False) and bundled_gdal_dir() is None:
+                    tried.append("安装目录缺少 gdal\\（重新安装可恢复）")
+                else:
+                    tried.append("到设置里选择本机 QGIS 的 ogr2ogr.exe，或清掉失效的旧路径")
+                ogr_detail = "未找到；" + "；".join(tried)
+        except Exception as exc:  # resolver may raise on odd setups
+            ogr_detail = str(exc)
+    else:
+        ogr_state = "skip"
+        ogr_detail = "当前未请求 DXF/SHP 输出"
     checks.append({"key": "ogr2ogr", "label": "ogr2ogr / GDAL", "state": ogr_state, "detail": ogr_detail or "未找到；DXF 导出需要"})
-    try:
-        gdal_dir = Path(resolve_gdal_data())
-        gdal_ok = gdal_dir.is_dir()
-    except Exception:
-        gdal_ok = False
-    _ = gdal_ok  # gdal-data resolution feeds ogr2ogr; surfaced only via export failures
 
-    dongle_ok = dongle_process_running()
-    dongle_state = "ok" if dongle_ok else ("warn" if needs_cli else "skip")
-    checks.append(
-        {
-            "key": "dongle",
-            "label": f"MapGIS 密码狗 ({DONGLE_PROCESS_NAME})",
-            "state": dongle_state,
-            "detail": "运行中" if dongle_ok else ("未检测到——cli 转换会失败" if needs_cli else "当前转换模式不需要"),
-        }
-    )
+    if needs_mapgis:
+        dongle_ok = dongle_process_running()
+        checks.append(
+            {
+                "key": "dongle",
+                "label": f"MapGIS 密码狗 ({DONGLE_PROCESS_NAME})",
+                "state": "ok" if dongle_ok else "warn",
+                "detail": "运行中" if dongle_ok else "未检测到——cli 转换会失败",
+            }
+        )
+    else:
+        checks.append(
+            {
+                "key": "dongle",
+                "label": f"MapGIS 密码狗 ({DONGLE_PROCESS_NAME})",
+                "state": "skip",
+                "detail": "当前未请求 MapGIS WL/WT 输出",
+            }
+        )
 
     import importlib.util
 
@@ -653,8 +610,8 @@ def preflight(conversion_mode: str = "cli", export_dxf: bool = True) -> dict[str
         }
     )
 
-    blocked = needs_cli and (section_state != "ok" or w60_state != "ok")
-    if not blocked and export_dxf and ogr_state == "missing":
+    blocked = needs_mapgis and (section_state != "ok" or w60_state != "ok")
+    if not blocked and (export_dxf or conversion_needs_dxf) and ogr_state == "missing":
         blocked = True
     warned = any(check["state"] == "warn" for check in checks)
     overall = "blocked" if blocked else ("needs_attention" if warned else "ready")
@@ -699,20 +656,7 @@ class EngineHost:
         provided = {str(k): str(v) for k, v in (args.get("settings") or {}).items()}
         settings = dict(read_machine_settings())
         settings.update(provided)
-        missing = [
-            (label, value)
-            for label, key, must_be_dir in (
-                ("SECTION 程序", "section_exe", False),
-                ("W60 转换程序", "w60_conv_exe", False),
-                ("ogr2ogr", "ogr2ogr", False),
-                ("GDAL 数据目录", "gdal_data", True),
-                ("OCR 解释器", "ocr_python", False),
-                ("项目根目录", "project_root", True),
-            )
-            if key in provided
-            and (value := provided[key].strip())
-            and not (Path(value).is_dir() if must_be_dir else Path(value).is_file())
-        ]
+        missing = invalid_settings_paths(provided)
         if missing:
             details = "；".join(f"{label}: {value}" for label, value in missing)
             raise ValueError(f"以下路径在本机不存在，请重新选择：{details}")
@@ -731,33 +675,8 @@ class EngineHost:
         return {"settings_file": str(target), "key_saved": key_saved}
 
     def cmd_autodetect_tools(self, args: dict[str, Any]) -> dict[str, Any]:
-        from geoscan.env_probe import program_candidates
-        from geoscan.production_accuracy_workflow import resolve_gdal_data, resolve_ogr2ogr
-
         current = {str(k): str(v) for k, v in (args.get("settings") or read_machine_settings()).items()}
-        filled: dict[str, str] = {}
-        for key, program in (("section_exe", "section"), ("w60_conv_exe", "w60_conv")):
-            if current.get(key, "").strip():
-                continue
-            for candidate in program_candidates(program):
-                if candidate.is_file():
-                    filled[key] = str(candidate)
-                    break
-        if not current.get("ogr2ogr", "").strip():
-            try:
-                candidate = Path(resolve_ogr2ogr())
-                if candidate.is_file():
-                    filled["ogr2ogr"] = str(candidate)
-            except Exception:
-                pass
-        if not current.get("gdal_data", "").strip():
-            try:
-                candidate = Path(resolve_gdal_data())
-                if candidate.is_dir():
-                    filled["gdal_data"] = str(candidate)
-            except Exception:
-                pass
-        return {"filled": filled}
+        return {"filled": autodetect_tool_paths(current)}
 
     def cmd_preflight(self, args: dict[str, Any]) -> dict[str, Any]:
         return preflight(
@@ -957,8 +876,6 @@ class EngineHost:
             raise ValueError("已有任务在运行；请先停止或等待完成。")
         try:
             config = build_program_config_from_gui(state)
-            if form.get("skip_dongle_check"):
-                config = replace(config, skip_dongle_check=True)
             output_root = Path(str(config.output_root))
             self._stop_single.clear()
             self._stop_batch.clear()
@@ -1049,6 +966,9 @@ class EngineHost:
                 retry_incomplete=bool(args.get("retry_incomplete", False)),
                 limit=limit,
             )
+            # Consoles up to 0.2.2 send this at args level for batch runs (the
+            # console exe only updates via the full installer, so an engine-zip
+            # update can pair a new engine with an old shell).
             if args.get("skip_dongle_check"):
                 config = replace(config, skip_dongle_check=True)
             self._stop_single.clear()

@@ -112,17 +112,21 @@ def test_ocr_and_vectorization_never_enhance() -> None:
         assert "raster_enhance" not in source, module_name
 
 
-def test_enhanced_backdrop_comes_from_pixel_unit_raster() -> None:
-    """The backdrop must overlay the vectors 1:1 -> generated from the pixel-unit
-    raster at pixel-unit dpi, so its geometry matches the vectors exactly."""
+def test_enhanced_backdrop_comes_from_working_raster_at_source_dpi() -> None:
+    """The backdrop must overlay the vectors 1:1 -> generated from the working
+    raster keeping the source dpi, so MapGIS/QGIS display it at sheet size
+    matching the mm-unit exports."""
     import geoscan
 
     source = (
         Path(geoscan.__file__).parent / "production_program.py"
     ).read_text(encoding="utf-8")
-    assert "enhance_image_file(" in source
-    assert "pixel_unit_raster," in source
-    assert "dpi=(PIXEL_UNIT_DPI, PIXEL_UNIT_DPI)" in source
+    assert "enhance_image_file(\n            working_raster," in source
+    # No dpi override on the enhance call: the deliverable backdrop keeps the
+    # source dpi (the pixel-unit raster writer still uses PIXEL_UNIT_DPI).
+    enhance_call = source.split("enhance_image_file(\n")[1].split(")")[0]
+    assert "dpi=" not in enhance_call
+    assert "working_raster" in enhance_call
 
 
 def _load_level_tool():
@@ -196,7 +200,7 @@ def test_level_tool_cli_flags() -> None:
 
 def test_enhanced_preview_default_is_standard_everywhere() -> None:
     from geoscan.batch_runner import BatchConfig
-    from geoscan.production_gui import GuiFormState
+    from geoscan.run_form import GuiFormState
     from geoscan.production_program import ProgramConfig
 
     assert ProgramConfig(
@@ -230,7 +234,7 @@ def test_run_program_rejects_bad_enhanced_preview(tmp_path: Path) -> None:
 
 def test_cli_and_gui_route_enhanced_preview() -> None:
     from geoscan import batch_runner, production_program
-    from geoscan.production_gui import (
+    from geoscan.run_form import (
         GuiFormState,
         build_batch_config_from_gui,
         build_program_config_from_gui,

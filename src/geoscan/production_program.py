@@ -19,6 +19,7 @@ from geoscan.ai_vision_review import (
     analyze_map_image_with_ai,
 )
 from geoscan.area_candidate_workflow import generate_review_area_candidates
+from geoscan.candidates import utc_now as _utc_now, write_json as _write_json
 from geoscan.mapgis67_bridge import (
     prepare_batch,
     run_dxf_to_wl_wt_pipeline,
@@ -112,6 +113,10 @@ class ProgramConfig:
     line_export_source: str = "raw"
     ai_enhance: bool = False
     export_dxf: bool = True
+    # QGIS alignment files in the deliverable folder: .tfw world files for the
+    # rasters + mm-unit GeoJSON copies. Cheap to produce; off only when the
+    # user explicitly deselects the QGIS output category.
+    qgis_files: bool = True
     auto_generate_line_candidates: bool = True
     auto_generate_text_candidates: bool = True
     include_areas: bool = False
@@ -164,33 +169,24 @@ def derive_map_id_from_filename(path: Path | str) -> str:
     return sanitize_map_id(stem)
 
 
-def default_text_target_file(map_id: str) -> str:
+def _default_target_file(map_id: str, kind: str, extension: str, fallback: str) -> str:
     numbers = re.findall(r"\d+", map_id)
     if not numbers:
-        return "TEXTTXT.WT"
+        return fallback
     suffix = numbers[-1][-2:].zfill(2)
-    return f"T{suffix}TXT.WT"
+    return f"T{suffix}{kind}.{extension}"
+
+
+def default_text_target_file(map_id: str) -> str:
+    return _default_target_file(map_id, "TXT", "WT", "TEXTTXT.WT")
 
 
 def default_line_target_file(map_id: str) -> str:
-    numbers = re.findall(r"\d+", map_id)
-    if not numbers:
-        return "LINE.WL"
-    suffix = numbers[-1][-2:].zfill(2)
-    return f"T{suffix}LINE.WL"
+    return _default_target_file(map_id, "LINE", "WL", "LINE.WL")
 
 
 def default_area_target_file(map_id: str) -> str:
-    numbers = re.findall(r"\d+", map_id)
-    if not numbers:
-        return "AREA.WP"
-    suffix = numbers[-1][-2:].zfill(2)
-    return f"T{suffix}AREA.WP"
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return _default_target_file(map_id, "AREA", "WP", "AREA.WP")
 
 
 def _sha256(path: Path) -> str:
@@ -204,10 +200,6 @@ def _sha256(path: Path) -> str:
 def _count_geojson_features(path: Path) -> int:
     payload = json.loads(path.read_text(encoding="utf-8"))
     return len(payload.get("features", []))
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _resolve_output_root(project_root: Path, map_id: str, output_root: Path | None) -> Path:
@@ -354,9 +346,13 @@ def _write_pixel_unit_raster(*, frozen_raster: Path, output_root: Path, map_id: 
             round(dpi_x / PIXEL_UNIT_DPI, 6),
             round(dpi_y / PIXEL_UNIT_DPI, 6),
         ],
+        "export_units": "mm",
+        "px_to_mm_scale": [round(25.4 / dpi_x, 8), round(25.4 / dpi_y, 8)],
         "mapgis_import_note": (
-            "Use this raster for the current pixel-coordinate WL/WT package; "
-            "do not use the original 300 dpi TIFF for overlay checks."
+            "Internal raster for console/AI pixel-space overlay checks only. "
+            "The exported DXF/WL/WT are in millimetres at the source dpi; in MapGIS "
+            "overlay them on the source-dpi raster shipped in MAPGIS_LOAD_READY, "
+            "not on this pixel-unit file."
         ),
     }
     _write_json(freeze_dir / "RASTER_ALIGNMENT_REPORT.json", report)
@@ -390,6 +386,33 @@ def _staging_ready_dir(output_root: Path) -> Path:
     return output_root / "08_SECTION_W60" / "MAPGIS_READY"
 
 
+def _write_world_file(
+    raster_dst: Path, *, px_to_mm: tuple[float, float], height_px: float
+) -> Path:
+    """ESRI world file so QGIS georeferences the raster copy in sheet-mm.
+
+    Same coordinate system as the exported DXF/GeoJSON: x right, y up, origin
+    at the bottom-left of the raster, 1 unit = 1 mm on the map sheet.
+    """
+    scale_x, scale_y = px_to_mm
+    world_path = raster_dst.with_suffix(".tfw")
+    world_path.write_text(
+        "\n".join(
+            [
+                f"{scale_x:.10f}",
+                "0.0",
+                "0.0",
+                f"{-scale_y:.10f}",
+                f"{0.5 * scale_x:.10f}",
+                f"{(float(height_px) - 0.5) * scale_y:.10f}",
+                "",
+            ]
+        ),
+        encoding="ascii",
+    )
+    return world_path
+
+
 def _write_mapgis_load_ready(
     *,
     output_root: Path,
@@ -398,6 +421,8 @@ def _write_mapgis_load_ready(
     conversion_report: dict[str, Any],
     line_report: dict[str, Any] | None = None,
     text_report: dict[str, Any] | None = None,
+    area_report: dict[str, Any] | None = None,
+    qgis_files: bool = True,
 ) -> dict[str, Any]:
     load_dir = output_root / "MAPGIS_LOAD_READY"
     ready_dir = _staging_ready_dir(output_root)
@@ -407,13 +432,48 @@ def _write_mapgis_load_ready(
                 shutil.rmtree(child)
             else:
                 child.unlink()
-    raster_src = Path(str(raster_alignment["pixel_unit_raster"]))
+    # Deliverable backdrop = the source-dpi raster the vectors were traced
+    # from. MapGIS displays it at physical sheet size (mm), matching the
+    # mm-unit WL/WT/DXF 1:1. (Older packages shipped the 25.4-dpi pixel-unit
+    # copy instead; that raster stays internal in 00_INPUT_FREEZE now.)
+    raster_src = Path(
+        str(raster_alignment.get("source_raster") or raster_alignment["pixel_unit_raster"])
+    )
     raster_record = _link_or_copy_file(raster_src, load_dir / raster_src.name)
     enhanced_record: dict[str, Any] | None = None
     enhanced_preview = raster_alignment.get("enhanced_preview") or {}
     enhanced_src = Path(str(enhanced_preview.get("target", "")))
     if enhanced_preview and enhanced_src.is_file():
         enhanced_record = _link_or_copy_file(enhanced_src, load_dir / enhanced_src.name)
+
+    # QGIS alignment package: world files for the raster copies + the exported
+    # GeoJSON (same mm coordinates as the DXF), so the folder opens in QGIS
+    # with rasters and vectors aligned without any manual georeferencing.
+    px_to_mm_pair = raster_alignment.get("px_to_mm_scale") or []
+    size_px = raster_alignment.get("source_size_px") or []
+    world_records: list[str] = []
+    qgis_records: list[dict[str, Any]] = []
+    if qgis_files and len(px_to_mm_pair) == 2 and len(size_px) == 2:
+        px_to_mm = (float(px_to_mm_pair[0]), float(px_to_mm_pair[1]))
+        height_px = float(size_px[1])
+        for record in (raster_record, enhanced_record):
+            if record is None:
+                continue
+            world_records.append(
+                str(
+                    _write_world_file(
+                        Path(record["destination"]), px_to_mm=px_to_mm, height_px=height_px
+                    )
+                )
+            )
+        for label, exchange in (("line", line_report), ("text", text_report), ("area", area_report)):
+            if not exchange or exchange.get("output_units") != "mm":
+                continue
+            geojson_src = Path(str(exchange.get("source_geojson") or ""))
+            if geojson_src.is_file():
+                record = _link_or_copy_file(geojson_src, load_dir / geojson_src.name)
+                record["kind"] = f"{label}_geojson"
+                qgis_records.append(record)
 
     mapgis_records: list[dict[str, Any]] = []
     skipped_empty_files: list[str] = []
@@ -481,7 +541,8 @@ def _write_mapgis_load_ready(
                 "",
                 f"Map id: `{map_id}`",
                 "",
-                "Load this raster for overlay with the current WL/WT files:",
+                "Vector units: millimetres on the map sheet (same physical size as the "
+                "source scan). Load this source-dpi raster for overlay with the WL/WT files:",
                 "",
                 f"- `{raster_record['destination']}`",
                 *(
@@ -497,8 +558,6 @@ def _write_mapgis_load_ready(
                     else []
                 ),
                 "",
-                "Do not use the original 300 dpi TIFF for this overlay check; the current WL/WT files use pixel coordinates.",
-                "",
                 "MapGIS files in this folder:",
                 "",
                 *[f"- `{record['destination']}`" for record in mapgis_records],
@@ -513,6 +572,19 @@ def _write_mapgis_load_ready(
                     if dxf_records
                     else []
                 ),
+                *(
+                    [
+                        "QGIS: open the `.tif` directly (the `.tfw` world file georeferences "
+                        "it in sheet-mm) and add the `.geojson` / `.dxf` on top — they share "
+                        "the same coordinates, so everything aligns. Ignore the missing-CRS "
+                        "warning (this is a plane coordinate system, not an earth CRS).",
+                        "",
+                        *[f"- `{record['destination']}`" for record in qgis_records],
+                        "",
+                    ]
+                    if world_records
+                    else []
+                ),
             ]
         ),
         encoding="utf-8",
@@ -523,13 +595,18 @@ def _write_mapgis_load_ready(
         "enhanced_backdrop": enhanced_record,
         "mapgis_files": mapgis_records,
         "dxf_files": dxf_records,
+        "world_files": world_records,
+        "qgis_files": qgis_records,
         "skipped_empty_files": skipped_empty_files,
         "conversion_mode": conversion_mode,
         "conversion_ok": conversion_ok,
         "conversion_status": conversion_status,
         "complete": complete,
         "readme": str(readme),
-        "note": "Use files in this folder for MapGIS overlay checks of the current pixel-coordinate package.",
+        "note": (
+            "Deliverable folder: source-dpi raster + mm-unit WL/WT/DXF/GeoJSON. "
+            "MapGIS overlays the raster at sheet size; QGIS uses the .tfw world files."
+        ),
     }
     _write_json(load_dir / "MAPGIS_LOAD_READY_REPORT.json", report)
     return report
@@ -807,7 +884,7 @@ Rules for this run:
 - Computer Use is not allowed as a production dependency.
 - If conversion fails, the status stays incomplete.
 - Preferred MapGIS load folder: `{mapgis_load_ready.get("load_folder", "")}`
-- MapGIS overlay raster for current pixel-coordinate WL/WT: `{raster_alignment.get("pixel_unit_raster", "")}`
+- Exported vectors are in sheet-mm (px * 25.4/dpi); overlay them on the source-dpi raster: `{raster_alignment.get("source_raster", "")}`
 
 Main reports:
 
@@ -915,18 +992,22 @@ def run_production_program(
         output_root=output_root,
         map_id=config.map_id,
     )
+    # All exported vectors (DXF/GeoJSON -> WL/WT/WP) are scaled px -> sheet-mm
+    # so the map loads at the source scan's physical size in MapGIS/QGIS.
+    source_dpi = raster_alignment_report["source_dpi"]
+    px_to_mm = (25.4 / float(source_dpi[0]), 25.4 / float(source_dpi[1]))
     if config.enhanced_preview != "none":
-        # Derive from the pixel-unit raster so geometry + dpi match the vectors
-        # exactly (human-viewing backdrop; vectorization never reads it).
-        pixel_unit_raster = Path(str(raster_alignment_report["pixel_unit_raster"]))
-        enhanced_target = pixel_unit_raster.with_name(
-            f"{config.map_id.lower()}_mapgis_pixel_units_enhanced.tif"
+        # Derive from the working raster so the pixel geometry matches the
+        # vectors exactly, and keep the source dpi so MapGIS/QGIS display it
+        # at sheet size like the mm-unit vectors (human-viewing backdrop;
+        # vectorization never reads it).
+        enhanced_target = working_raster.with_name(
+            f"{config.map_id.lower()}_enhanced.tif"
         )
         raster_alignment_report["enhanced_preview"] = enhance_image_file(
-            pixel_unit_raster,
+            working_raster,
             enhanced_target,
             preset=config.enhanced_preview,
-            dpi=(PIXEL_UNIT_DPI, PIXEL_UNIT_DPI),
         )
 
     _stop_check("line_candidates")
@@ -1084,11 +1165,8 @@ def run_production_program(
     # clean, the removed strokes land in a review sidecar. Source layers stay
     # byte-identical; skipped entirely when nothing gets flagged.
     text_interference_report: dict[str, Any] | None = None
-    if (
-        line_export_path is not None
-        and text_candidates_path is not None
-        and _count_geojson_features(line_export_path) > 0
-    ):
+    line_export_count = _count_geojson_features(line_export_path) if line_export_path is not None else 0
+    if line_export_count > 0 and text_candidates_path is not None:
         line_workflow_dir = output_root / "04_LINE_WORKFLOW"
         flagged_path = (
             line_workflow_dir
@@ -1106,9 +1184,10 @@ def run_production_program(
         )
         if text_interference_report.get("written"):
             line_export_path = flagged_path
+            line_export_count = int(text_interference_report["kept_count"])
 
     line_report: dict[str, Any] | None = None
-    if line_export_path is not None and _count_geojson_features(line_export_path) > 0:
+    if line_export_path is not None and line_export_count > 0:
         target_file = config.target_line_file or default_line_target_file(config.map_id)
         line_report = write_line_exchange_package(
             source_geojson=line_export_path,
@@ -1116,6 +1195,7 @@ def run_production_program(
             map_id=config.map_id,
             target_file=target_file,
             export_dxf=config.export_dxf,
+            px_to_mm=px_to_mm,
         )
         line_report["line_export_source"] = config.line_export_source
 
@@ -1128,6 +1208,7 @@ def run_production_program(
             map_id=config.map_id,
             target_file=target_file,
             export_dxf=config.export_dxf,
+            px_to_mm=px_to_mm,
         )
 
     area_report: dict[str, Any] | None = None
@@ -1139,6 +1220,7 @@ def run_production_program(
             map_id=config.map_id,
             target_file=target_file,
             export_shp=config.export_dxf,
+            px_to_mm=px_to_mm,
         )
 
     _stop_check("conversion")
@@ -1214,6 +1296,8 @@ def run_production_program(
         conversion_report=conversion_report,
         line_report=line_report,
         text_report=text_report,
+        area_report=area_report,
+        qgis_files=config.qgis_files,
     )
     _write_json(output_root / "PROGRAM_RUN_REPORT.json", report)
     _write_program_readme(output_root / "WORKFLOW_PROGRAM_README.md", report)
@@ -1294,12 +1378,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=sorted(VALID_ENHANCED_PREVIEW_MODES),
         default="standard",
         help=(
-            "Extra human-viewing backdrop written from the pixel-unit raster "
-            "(*_mapgis_pixel_units_enhanced.tif; same geometry, vectors overlay 1:1): "
+            "Extra human-viewing backdrop written from the working raster "
+            "(*_enhanced.tif; same geometry and dpi, vectors overlay 1:1): "
             "none | light | standard (default) | strong. Vectorization never reads it."
         ),
     )
     run.add_argument("--no-export-dxf", action="store_true")
+    run.add_argument(
+        "--no-qgis-files",
+        action="store_true",
+        help="Skip the QGIS alignment files (.tfw world files + mm-unit GeoJSON copies) in MAPGIS_LOAD_READY.",
+    )
     run.add_argument("--no-auto-line-candidates", action="store_true")
     run.add_argument("--no-auto-text-candidates", action="store_true")
     run.add_argument(
@@ -1351,7 +1440,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "named differently on this machine."
         ),
     )
-    run.set_defaults(computer_use_allowed=False)
     return parser
 
 
@@ -1385,6 +1473,7 @@ def main(argv: list[str] | None = None) -> None:
                     ai_enhance=bool(args.ai_enhance),
                     ocr_python=args.ocr_python,
                     export_dxf=not args.no_export_dxf,
+                    qgis_files=not args.no_qgis_files,
                     auto_generate_line_candidates=not args.no_auto_line_candidates,
                     auto_generate_text_candidates=not args.no_auto_text_candidates,
                     include_areas=bool(args.include_areas),

@@ -68,7 +68,7 @@ export default function AiPanel(props: Props) {
           <label htmlFor="ai-savekey">在本机加密保存 API Key（Windows 账户级加密，拷给别人解不出来）</label>
         </div>
         <div className="ai-actions">
-          <button className="btn" onClick={() => props.onSave(saveKey)} disabled={props.busy}>
+          <button className="btn primary" onClick={() => props.onSave(saveKey)} disabled={props.busy}>
             保存 AI 设置
           </button>
           <button className="btn" onClick={props.onTest} disabled={props.busy || form.ai_provider === "none"}>

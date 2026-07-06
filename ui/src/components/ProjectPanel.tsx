@@ -64,7 +64,7 @@ export default function ProjectPanel(props: Props) {
           ))
         )}
       </div>
-      <div className="panel-note">候选不会自动标记 checked=yes；一切以人工 MapGIS 验收为准。</div>
+      <div className="panel-note">候选不会自动标记 checked=yes；一切以人工复核为准。</div>
     </div>
   );
 }

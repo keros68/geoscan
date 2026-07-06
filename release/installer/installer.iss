@@ -1,4 +1,4 @@
-; Inno Setup script for the MapGIS semi-auto vectorization GUI.
+; Inno Setup script for GeoScan.
 ; Build the app first (release\build_clean.ps1), then compile this with the Inno
 ; Setup Compiler (ISCC.exe installer.iss) to produce dist\installer\GeoScanSetup.exe
 ;
@@ -12,9 +12,9 @@
 #define AppName "GeoScan"
 ; Keep this in step with src/geoscan/__init__.py __version__ and the release tag.
 #define AppVersion "0.2.2"
-; Primary UI since 0.2.0: the Tauri console shell. It spawns the frozen Python
-; engine via "GeoScan.exe --engine". The classic tkinter GUI stays installed as
-; a fallback entry for one release line.
+; The only UI: the Tauri console shell. It spawns the frozen Python engine via
+; "GeoScan.exe --engine". GeoScan.exe itself has no interface (the classic
+; tkinter GUI was removed) — it carries --engine / --check / --batch.
 #define ConsoleExe "GeoScanConsole.exe"
 #define AppExe "GeoScan.exe"
 ; dist folder relative to this .iss (release\installer\ -> repo\dist\...)
@@ -73,13 +73,12 @@ Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\GeoScan"; Filename: "{app}\{#ConsoleExe}"
-Name: "{group}\GeoScan（经典界面）"; Filename: "{app}\{#AppExe}"
 Name: "{group}\卸载 GeoScan"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\GeoScan"; Filename: "{app}\{#ConsoleExe}"; Tasks: desktopicon
 
 [Run]
 ; Headless self-check right after install so a broken bundle fails visibly.
-; --check exercises the frozen Python runtime (cv2 conversion + GUI class),
+; --check exercises the frozen Python runtime (cv2 conversion + engine modules),
 ; which is exactly what the console's engine relies on.
 Filename: "{app}\{#AppExe}"; Parameters: "--check"; Flags: runhidden waituntilterminated; StatusMsg: "正在自检..."
 Filename: "{app}\{#ConsoleExe}"; Description: "启动 GeoScan"; Flags: nowait postinstall skipifsilent
@@ -91,9 +90,10 @@ Type: filesandordirs; Name: "{app}"
 
 [Code]
 // The console shell renders in WebView2. Win11 / recent Win10 ship it with the
-// OS or Edge; on a machine without it the console window would come up blank,
-// so warn (non-blocking — the classic GUI works regardless) with a download
-// pointer. Evergreen runtime registry locations, per-machine then per-user.
+// OS or Edge; without it the console — GeoScan's only UI — cannot start, so
+// warn with a download pointer. Non-blocking on purpose: the user can install
+// WebView2 after GeoScan, before first launch. Evergreen runtime registry
+// locations, per-machine then per-user.
 function WebView2Installed(): Boolean;
 var
   Version: string;
@@ -110,9 +110,9 @@ function InitializeSetup(): Boolean;
 begin
   if not WebView2Installed() then
     MsgBox('未检测到 Microsoft WebView2 运行库。'#13#10 +
-           'GeoScan 主界面需要它才能显示；Windows 11 自带，老系统可到微软官网搜索'#13#10 +
+           'GeoScan 的界面必须依赖它才能启动；Windows 11 自带，老系统可到微软官网搜索'#13#10 +
            '“WebView2 Runtime” 免费安装。'#13#10#13#10 +
-           '仍可继续安装：经典界面（GeoScan（经典界面）快捷方式）不受影响。',
+           '可以继续安装 GeoScan，但首次使用前请先装好 WebView2，否则界面无法打开。',
            mbInformation, MB_OK);
   Result := True;
 end;

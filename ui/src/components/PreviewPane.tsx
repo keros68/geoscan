@@ -253,11 +253,11 @@ export default function PreviewPane(props: Props) {
           <div className="preview-empty">
             <h2>从一张扫描图开始</h2>
             <p>
-              ① 打开输入图片（Map ID 自动识别）→ ② 点“开始”跑完整流程 → ③ 完成后在 MapGIS 中装入
-              MAPGIS_LOAD_READY 里的成果。运行完成后，线/文字候选会叠加显示在这里。
+              ① 打开影像（Map ID 自动识别）→ ② 在“运行参数”里选择 MapGIS / DXF / QGIS 输出 → ③
+              点“开始”。完成后可在底部“输出文件”或输出目录查看成果；线/文字候选会叠加显示在这里，最终以人工复核为准。
             </p>
             <button className="btn primary" onClick={props.onOpenImage}>
-              打开输入图片…
+              打开影像…
             </button>
           </div>
         )}

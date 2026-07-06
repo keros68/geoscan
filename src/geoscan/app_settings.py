@@ -37,9 +37,15 @@ SETTINGS_ENV_KEYS: dict[str, str] = {
 }
 
 # Persisted for the GUI only; never exported to env. AI settings cover the
-# provider/url/model ONLY — the API key is pasted per session and never saved.
+# provider/url/model ONLY — the API key is encrypted separately when requested.
 GUI_ONLY_KEYS = (
-    "project_root", "ai_provider", "ai_base_url", "ai_model", "ai_enhance",
+    "project_root",
+    "level_input", "enhanced_preview", "conversion_mode", "include_areas",
+    "export_dxf", "qgis_files", "wait_timeout_seconds",
+    "target_line_file", "target_text_file", "target_area_file",
+    "line_engine", "line_connect", "line_repair", "line_export_source",
+    "line_bridge_gap_px", "line_close_gap_px",
+    "ai_provider", "ai_base_url", "ai_model", "ai_enhance",
     "auto_check_updates",
 )
 

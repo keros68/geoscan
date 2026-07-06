@@ -1,36 +1,22 @@
-import { useEffect, useRef, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { BatchRow, LogEntry, Preflight, RunForm, RunSummary } from "../types";
-import AiPanel from "./AiPanel";
+import { useEffect, useRef } from "react";
+import { LogEntry, Preflight, RunSummary } from "../types";
 
-export type DockTab = "log" | "files" | "batch" | "ai" | "diag";
+export type DockTab = "summary" | "log" | "files" | "diag";
 
 interface Props {
   tab: DockTab;
   onTab: (tab: DockTab) => void;
   logs: LogEntry[];
   summary: RunSummary | null;
-  batchRows: BatchRow[];
-  batchRunning: boolean;
   preflight: Preflight | null;
   stderrLines: string[];
-  form: RunForm;
-  hasSavedKey: boolean;
-  aiBusy: boolean;
-  onUpdateForm: (patch: Partial<RunForm>) => void;
-  onTestAi: () => void;
-  onAnalyzeAi: () => void;
-  onSaveAiSettings: (saveKey: boolean) => void;
-  onStartBatch: (sourceDir: string, limit: string, retryIncomplete: boolean) => void;
-  onStopBatch: () => void;
+  onOpenOutput: () => void;
+  onCopyDiagnostics: () => void;
   onOpenPath: (path: string) => void;
 }
 
 export default function BottomDock(props: Props) {
   const logRef = useRef<HTMLDivElement>(null);
-  const [batchDir, setBatchDir] = useState("");
-  const [batchLimit, setBatchLimit] = useState("");
-  const [retryIncomplete, setRetryIncomplete] = useState(false);
 
   useEffect(() => {
     if (props.tab === "log" && logRef.current) {
@@ -39,10 +25,9 @@ export default function BottomDock(props: Props) {
   }, [props.logs, props.tab]);
 
   const tabs: { key: DockTab; label: string }[] = [
+    { key: "summary", label: "摘要" },
     { key: "log", label: "日志" },
     { key: "files", label: "输出文件" },
-    { key: "batch", label: "批量" },
-    { key: "ai", label: "AI（可选）" },
     { key: "diag", label: "诊断" },
   ];
 
@@ -52,11 +37,54 @@ export default function BottomDock(props: Props) {
         {tabs.map((tab) => (
           <button key={tab.key} className={props.tab === tab.key ? "active" : ""} onClick={() => props.onTab(tab.key)}>
             {tab.label}
-            {tab.key === "batch" && props.batchRows.length > 0 ? ` (${props.batchRows.length})` : ""}
           </button>
         ))}
       </div>
       <div className="dock-body" ref={props.tab === "log" ? logRef : undefined}>
+        {props.tab === "summary" && (
+          <div className="summary-panel">
+            <div className="summary-stats">
+              <div>
+                <span>line_candidates</span>
+                <b>{props.summary?.line_candidates ?? "--"}</b>
+              </div>
+              <div>
+                <span>text_candidates</span>
+                <b>{props.summary?.text_candidates ?? "--"}</b>
+              </div>
+              <div>
+                <span>checked=yes</span>
+                <b
+                  style={(props.summary?.checked_yes ?? 0) > 0 ? { color: "var(--red)" } : undefined}
+                  title={(props.summary?.checked_yes ?? 0) > 0 ? "违规：候选不允许自动标记 checked=yes，请检查外部候选文件" : undefined}
+                >
+                  {props.summary?.has_report ? props.summary.checked_yes ?? 0 : "--"}
+                </b>
+              </div>
+              <div>
+                <span>ready_files</span>
+                <b>{props.summary?.ready_files ? props.summary.ready_files.length : "--"}</b>
+              </div>
+            </div>
+            <div className="summary-actions">
+              <button className="btn" onClick={props.onOpenOutput}>
+                打开输出目录
+              </button>
+              <button className="btn" onClick={props.onCopyDiagnostics}>
+                复制诊断
+              </button>
+            </div>
+            {(props.summary?.checked_yes ?? 0) > 0 && (
+              <div className="dock-empty" style={{ color: "var(--red)" }}>
+                检测到 {props.summary!.checked_yes} 个候选被标记为已确认——这违反产品规则，请检查是否误用了外部候选文件。
+              </div>
+            )}
+            {props.summary?.conversion_status && (
+              <div className="dock-empty">转换状态：{props.summary.conversion_status}</div>
+            )}
+          </div>
+        )}
+
         {props.tab === "log" && (
           <div className="log-view">
             {props.logs.length === 0 ? (
@@ -102,105 +130,10 @@ export default function BottomDock(props: Props) {
             </table>
           ) : (
             <div className="dock-empty">
-              运行成功后，交付包（像素单位 TIFF + WL/WT + DXF）会列在这里。
+              运行成功后，交付包（源 dpi TIFF + .tfw + GeoJSON/DXF + 可选 WL/WT）会列在这里。
               {props.summary?.has_report ? " 本次运行还没有生成完整交付包。" : ""}
             </div>
           ))}
-
-        {props.tab === "batch" && (
-          <>
-            <div className="batch-form">
-              <button
-                className="btn"
-                disabled={props.batchRunning}
-                onClick={() =>
-                  void openDialog({ title: "选择包含源 TIFF 的文件夹", directory: true }).then((picked) => {
-                    if (typeof picked === "string" && picked) setBatchDir(picked);
-                  })
-                }
-              >
-                图源文件夹…
-              </button>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--ink-muted)" }}>
-                {batchDir || "未选择"}
-              </span>
-              <label style={{ fontSize: 12.5 }}>
-                数量上限
-                <input
-                  type="text"
-                  value={batchLimit}
-                  onChange={(event) => setBatchLimit(event.target.value)}
-                  style={{ width: 64, marginLeft: 4 }}
-                  placeholder="全部"
-                  title="留空=整个文件夹全部处理；填数字=本次最多处理 N 张"
-                  disabled={props.batchRunning}
-                />
-              </label>
-              <label className="checkbox-row" style={{ padding: 0 }}>
-                <input
-                  type="checkbox"
-                  checked={retryIncomplete}
-                  disabled={props.batchRunning}
-                  onChange={(event) => setRetryIncomplete(event.target.checked)}
-                />
-                重跑不完整的图
-              </label>
-              <span style={{ flex: 1 }} />
-              <button
-                className="btn primary"
-                disabled={props.batchRunning || !batchDir}
-                onClick={() => props.onStartBatch(batchDir, batchLimit, retryIncomplete)}
-              >
-                开始批量
-              </button>
-              <button className="btn danger" disabled={!props.batchRunning} onClick={props.onStopBatch}>
-                完成当前图后停止
-              </button>
-            </div>
-            {props.batchRows.length === 0 ? (
-              <div className="dock-empty">
-                批量使用当前运行参数；一次一张图；已完成的图自动跳过（可断点续跑）。
-              </div>
-            ) : (
-              <table className="batch-table">
-                <thead>
-                  <tr>
-                    <th>Map ID</th>
-                    <th>状态</th>
-                    <th>线候选</th>
-                    <th>文字候选</th>
-                    <th>转换</th>
-                    <th>错误</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {props.batchRows.map((row, index) => (
-                    <tr key={index}>
-                      <td className="mono">{row.map_id ?? ""}</td>
-                      <td>{row.status ?? ""}</td>
-                      <td className="mono">{row.line_candidates ?? ""}</td>
-                      <td className="mono">{row.text_candidates ?? ""}</td>
-                      <td>{row.conversion_status ?? ""}</td>
-                      <td>{row.error ?? ""}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </>
-        )}
-
-        {props.tab === "ai" && (
-          <AiPanel
-            form={props.form}
-            hasSavedKey={props.hasSavedKey}
-            busy={props.aiBusy}
-            onUpdateForm={props.onUpdateForm}
-            onTest={props.onTestAi}
-            onAnalyze={props.onAnalyzeAi}
-            onSave={props.onSaveAiSettings}
-          />
-        )}
 
         {props.tab === "diag" && (
           <div className="log-view">

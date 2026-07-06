@@ -26,6 +26,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Any
 
+import cv2
 import numpy as np
 
 from .candidates import feature
@@ -146,6 +147,44 @@ def apply_connectivity_overrides(
     return profile
 
 
+def dark_proximity_mask(
+    gray: np.ndarray,
+    *,
+    window: int = BRIDGE_SAMPLE_WINDOW_PX,
+    threshold: int = BRIDGE_DARK_THRESHOLD,
+) -> np.ndarray:
+    """Precompute the per-pixel ink-evidence test of ``dark_coverage_px``.
+
+    ``mask[y, x]`` is True iff the clamped ``(2*window+1)`` box around
+    ``(x, y)`` contains a value <= ``threshold`` — exactly the per-sample
+    window test in ``dark_coverage_px``, evaluated once for the whole raster.
+    "min over the box <= threshold" == "OR of (gray <= threshold) over the
+    box" == box dilation; cv2.dilate's default constant border adds no
+    foreground, matching the numpy-slice clamping (verified by tests against
+    the loop path).
+    """
+    dark = (gray <= threshold).astype(np.uint8)
+    kernel = np.ones((2 * int(window) + 1, 2 * int(window) + 1), dtype=np.uint8)
+    return cv2.dilate(dark, kernel).astype(bool)
+
+
+def _dark_mask_for(
+    gray: np.ndarray,
+    cache: dict[tuple[int, int], np.ndarray],
+    *,
+    window: int,
+    threshold: int = BRIDGE_DARK_THRESHOLD,
+) -> np.ndarray:
+    """Lazily build/reuse one mask per (window, threshold); ``cache`` must be
+    used with a single ``gray`` raster only (one dict per run)."""
+    key = (int(window), int(threshold))
+    mask = cache.get(key)
+    if mask is None:
+        mask = dark_proximity_mask(gray, window=window, threshold=threshold)
+        cache[key] = mask
+    return mask
+
+
 def dark_coverage_px(
     gray: np.ndarray,
     a: tuple[float, float],
@@ -153,11 +192,41 @@ def dark_coverage_px(
     *,
     dark_threshold: int = BRIDGE_DARK_THRESHOLD,
     window: int = BRIDGE_SAMPLE_WINDOW_PX,
+    dark_mask: np.ndarray | None = None,
 ) -> float:
-    """Fraction of sample points along a->b (PIXEL coords) with map ink nearby."""
+    """Fraction of sample points along a->b (PIXEL coords) with map ink nearby.
+
+    ``dark_mask`` (optional) is a precomputed ``dark_proximity_mask(gray,
+    window=window, threshold=dark_threshold)`` for the SAME window/threshold;
+    it replaces per-sample window slicing with direct lookups — identical
+    result, much faster over many calls. ``None`` keeps the original loop.
+    """
     height, width = gray.shape[:2]
     gap = math.hypot(b[0] - a[0], b[1] - a[1])
     samples = max(int(round(gap)), 8)
+    if dark_mask is not None:
+        # Same sample coordinates as the loop below (same IEEE ops + rint's
+        # ties-to-even matches Python round), evaluated on the mask.
+        t = np.arange(samples + 1, dtype=np.float64) / samples
+        xs = np.rint(a[0] + (b[0] - a[0]) * t).astype(np.int64)
+        ys = np.rint(a[1] + (b[1] - a[1]) * t).astype(np.int64)
+        inside = (xs >= 0) & (xs < width) & (ys >= 0) & (ys < height)
+        hits = int(np.count_nonzero(dark_mask[ys[inside], xs[inside]]))
+        # A sample just OUTSIDE the raster can still hit: its clamped window
+        # may overlap the border. Only that thin band needs the slow check.
+        near = (
+            (xs >= -window)
+            & (xs <= width - 1 + window)
+            & (ys >= -window)
+            & (ys <= height - 1 + window)
+            & ~inside
+        )
+        for x, y in zip(xs[near].tolist(), ys[near].tolist()):
+            x0, x1 = max(0, x - window), min(width, x + window + 1)
+            y0, y1 = max(0, y - window), min(height, y + window + 1)
+            if int(gray[y0:y1, x0:x1].min()) <= dark_threshold:
+                hits += 1
+        return hits / (samples + 1)
     hits = 0
     for index in range(samples + 1):
         t = index / samples
@@ -229,6 +298,7 @@ def regularize_small_boxes(
     gray: np.ndarray,
     *,
     profile: ConnectivityProfile,
+    dark_masks: dict[tuple[int, int], np.ndarray] | None = None,
     cluster_gap_px: float = 12.0,
     min_side_px: float = 20.0,
     max_side_px: float = 220.0,
@@ -260,6 +330,8 @@ def regularize_small_boxes(
     }
     if not profile.box_regularize or not features:
         return features, [], [], report
+    if dark_masks is None:
+        dark_masks = {}
 
     height = int(gray.shape[0])
 
@@ -301,9 +373,17 @@ def regularize_small_boxes(
         )
 
     indices = sorted(fragment_bboxes)
-    for pos, i in enumerate(indices):
-        for j in indices[pos + 1 :]:
-            if _near(fragment_bboxes[i], fragment_bboxes[j]):
+    # Sweep over fragments ordered by bbox min-x: once a candidate's min-x is
+    # beyond this bbox's max-x + gap, no later candidate can be near either —
+    # avoids the all-pairs scan (quadratic in fragments, thousands on a map).
+    by_min_x = sorted(indices, key=lambda index: fragment_bboxes[index][0])
+    for pos, i in enumerate(by_min_x):
+        a = fragment_bboxes[i]
+        for j in by_min_x[pos + 1 :]:
+            b = fragment_bboxes[j]
+            if b[0] > a[2] + cluster_gap_px:
+                break
+            if _near(a, b):
                 parent[_find(i)] = _find(j)
     clusters: dict[int, list[int]] = {}
     for index in indices:
@@ -342,11 +422,12 @@ def regularize_small_boxes(
         aspect = width / max(box_height, 1e-6)
         if aspect < min_aspect or aspect > max_aspect:
             return None
+        mask = _dark_mask_for(gray, dark_masks, window=3)
         sides = (
-            dark_coverage_px(gray, (x1, y1), (x2, y1), window=3),
-            dark_coverage_px(gray, (x1, y2), (x2, y2), window=3),
-            dark_coverage_px(gray, (x1, y1), (x1, y2), window=3),
-            dark_coverage_px(gray, (x2, y1), (x2, y2), window=3),
+            dark_coverage_px(gray, (x1, y1), (x2, y1), window=3, dark_mask=mask),
+            dark_coverage_px(gray, (x1, y2), (x2, y2), window=3, dark_mask=mask),
+            dark_coverage_px(gray, (x1, y1), (x1, y2), window=3, dark_mask=mask),
+            dark_coverage_px(gray, (x2, y1), (x2, y2), window=3, dark_mask=mask),
         )
         if sum(side >= 0.6 for side in sides) < 3 or min(sides) < 0.3:
             return None
@@ -372,14 +453,15 @@ def regularize_small_boxes(
         max_grow = max_side_px
 
         def _side_candidates(fixed_a: float, fixed_b: float, base: float, sign: float, horizontal: bool) -> list[float]:
+            mask = _dark_mask_for(gray, dark_masks, window=2)
             candidates = [base]
             offset = 4.0
             while offset <= max_grow and len(candidates) < 4:
                 position = base + sign * offset
                 if horizontal:
-                    coverage = dark_coverage_px(gray, (fixed_a, position), (fixed_b, position), window=2)
+                    coverage = dark_coverage_px(gray, (fixed_a, position), (fixed_b, position), window=2, dark_mask=mask)
                 else:
-                    coverage = dark_coverage_px(gray, (position, fixed_a), (position, fixed_b), window=2)
+                    coverage = dark_coverage_px(gray, (position, fixed_a), (position, fixed_b), window=2, dark_mask=mask)
                 if coverage >= 0.85 and (len(candidates) == 1 or position * sign > candidates[-1] * sign + 3):
                     candidates.append(position)
                 offset += 2.0
@@ -647,6 +729,7 @@ def bridge_line_candidates(
     gray: np.ndarray,
     *,
     profile: ConnectivityProfile,
+    dark_masks: dict[tuple[int, int], np.ndarray] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Deterministically bridge nearby endpoints backed by raster ink.
 
@@ -665,6 +748,8 @@ def bridge_line_candidates(
     }
     if not profile.bridge_enabled or not features:
         return [], report
+    if dark_masks is None:
+        dark_masks = {}
 
     height = int(gray.shape[0])
     endpoints = _feature_endpoints(features, height=height)
@@ -721,7 +806,12 @@ def bridge_line_candidates(
         ):
             report["rejected_angle"] += 1
             continue
-        coverage = dark_coverage_px(gray, a.pixel, b.pixel)
+        coverage = dark_coverage_px(
+            gray,
+            a.pixel,
+            b.pixel,
+            dark_mask=_dark_mask_for(gray, dark_masks, window=BRIDGE_SAMPLE_WINDOW_PX),
+        )
         if coverage < profile.bridge_min_dark_coverage:
             report["rejected_no_ink"] += 1
             continue

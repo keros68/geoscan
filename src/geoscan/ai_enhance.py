@@ -25,13 +25,13 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from PIL import Image
 
+from .candidates import utc_now as _utc_now
 from .line_connectivity import dark_coverage_px
 from .ai_vision_review import (
     AiVisionConfig,
@@ -80,10 +80,6 @@ class AiEnhanceThresholds:
     dark_threshold: int = 140
     sample_window_px: int = 2
     max_text_edit_distance: int = 2
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _endpoint(feature: dict[str, Any], which: str) -> tuple[float, float] | None:

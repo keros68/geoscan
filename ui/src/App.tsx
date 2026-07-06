@@ -15,7 +15,6 @@ import {
   StageKey,
   StageState,
 } from "./types";
-import MenuBar from "./components/MenuBar";
 import Toolbar from "./components/Toolbar";
 import StageRail from "./components/StageRail";
 import ProjectPanel from "./components/ProjectPanel";
@@ -42,6 +41,7 @@ const DEFAULT_FORM: RunForm = {
   line_bridge_gap_px: "",
   line_close_gap_px: "",
   export_dxf: true,
+  qgis_files: true,
   wait_timeout_seconds: "300",
   target_line_file: "",
   target_text_file: "",
@@ -72,6 +72,65 @@ function now(): string {
   return new Date().toTimeString().slice(0, 8);
 }
 
+function normalizeOutputSelection(prev: RunForm, patch: Partial<RunForm>): RunForm {
+  const next = { ...prev, ...patch };
+  if (patch.conversion_mode && patch.conversion_mode !== "none" && patch.export_dxf !== false) {
+    next.export_dxf = true;
+  }
+  if (patch.export_dxf === false && next.conversion_mode !== "none") {
+    next.conversion_mode = "none";
+  }
+  return next;
+}
+
+function settingText(settings: Record<string, unknown>, key: string): string {
+  return String(settings[key] ?? "").trim();
+}
+
+function settingBool(settings: Record<string, unknown>, key: string, fallback: boolean): boolean {
+  const value = settingText(settings, key).toLowerCase();
+  if (["1", "true", "yes", "on"].includes(value)) return true;
+  if (["0", "false", "no", "off"].includes(value)) return false;
+  return fallback;
+}
+
+function settingChoice<T extends string>(
+  settings: Record<string, unknown>,
+  key: string,
+  allowed: readonly T[],
+  fallback: T,
+): T {
+  const value = settingText(settings, key);
+  return allowed.includes(value as T) ? (value as T) : fallback;
+}
+
+function runParamSettings(current: RunForm): Record<string, string> {
+  return {
+    level_input: current.level_input,
+    enhanced_preview: current.enhanced_preview,
+    conversion_mode: current.conversion_mode,
+    include_areas: String(current.include_areas),
+    export_dxf: String(current.export_dxf),
+    qgis_files: String(current.qgis_files),
+    wait_timeout_seconds: current.wait_timeout_seconds,
+    target_line_file: current.target_line_file,
+    target_text_file: current.target_text_file,
+    target_area_file: current.target_area_file,
+  };
+}
+
+function advancedParamSettings(current: RunForm): Record<string, string> {
+  return {
+    line_engine: current.line_engine,
+    line_connect: current.line_connect,
+    line_repair: current.line_repair,
+    line_export_source: current.line_export_source,
+    line_bridge_gap_px: current.line_bridge_gap_px,
+    line_close_gap_px: current.line_close_gap_px,
+    ai_enhance: String(current.ai_enhance),
+  };
+}
+
 export default function App() {
   const [form, setForm] = useState<RunForm>(DEFAULT_FORM);
   const [outputRoot, setOutputRoot] = useState("");
@@ -97,11 +156,18 @@ export default function App() {
   const [batchRows, setBatchRows] = useState<BatchRow[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [inspectorVisible, setInspectorVisible] = useState(true);
+  const [runParamsOpen, setRunParamsOpen] = useState(true);
+  const [runParamsFocusTick, setRunParamsFocusTick] = useState(0);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // Bumped by the menu entry so the inspector scrolls to + flashes the
   // advanced section even when it is already open.
   const [advancedFocusTick, setAdvancedFocusTick] = useState(0);
-  const [dockTab, setDockTab] = useState<DockTab>("log");
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchFocusTick, setBatchFocusTick] = useState(0);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiFocusTick, setAiFocusTick] = useState(0);
+  const [dockTab, setDockTab] = useState<DockTab>("summary");
   const [appVersion, setAppVersion] = useState("");
   const [hasSavedKey, setHasSavedKey] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
@@ -132,11 +198,11 @@ export default function App() {
   }, []);
 
   const refreshPreflight = useCallback(
-    async (conversionMode?: string) => {
+    async (next?: Pick<RunForm, "conversion_mode" | "export_dxf">) => {
       try {
         const data = await engineCall<Preflight>("preflight", {
-          conversion_mode: conversionMode ?? formRef.current.conversion_mode,
-          export_dxf: formRef.current.export_dxf,
+          conversion_mode: next?.conversion_mode ?? formRef.current.conversion_mode,
+          export_dxf: next?.export_dxf ?? formRef.current.export_dxf,
         });
         setPreflightData(data);
       } catch (error) {
@@ -203,17 +269,65 @@ export default function App() {
       void engineCall("get_settings")
         .then((data: any) => {
           const root = String(data.project_root ?? "");
-          const stored = data.settings ?? {};
+          const stored = (data.settings ?? {}) as Record<string, unknown>;
           setHasSavedKey(Boolean(data.has_saved_key));
-          setForm((prev) => ({
-            ...prev,
-            project_root: prev.project_root || root,
-            output_parent: prev.output_parent || root,
-            ai_provider: (stored.ai_provider || prev.ai_provider) as RunForm["ai_provider"],
-            ai_base_url: stored.ai_base_url || prev.ai_base_url,
-            ai_model: stored.ai_model || prev.ai_model,
-            ai_enhance: String(stored.ai_enhance ?? "").toLowerCase() === "true" || prev.ai_enhance,
-          }));
+          setForm((prev) => {
+            const next = normalizeOutputSelection(prev, {
+              project_root: prev.project_root || root,
+              output_parent: prev.output_parent || root,
+              level_input: settingChoice(stored, "level_input", ["off", "auto", "force"] as const, prev.level_input),
+              enhanced_preview: settingChoice(
+                stored,
+                "enhanced_preview",
+                ["none", "light", "standard", "strong"] as const,
+                prev.enhanced_preview,
+              ),
+              conversion_mode: settingChoice(
+                stored,
+                "conversion_mode",
+                ["none", "prepare", "cli"] as const,
+                prev.conversion_mode,
+              ),
+              include_areas: settingBool(stored, "include_areas", prev.include_areas),
+              export_dxf: settingBool(stored, "export_dxf", prev.export_dxf),
+              qgis_files: settingBool(stored, "qgis_files", prev.qgis_files),
+              wait_timeout_seconds: settingText(stored, "wait_timeout_seconds") || prev.wait_timeout_seconds,
+              target_line_file: settingText(stored, "target_line_file") || prev.target_line_file,
+              target_text_file: settingText(stored, "target_text_file") || prev.target_text_file,
+              target_area_file: settingText(stored, "target_area_file") || prev.target_area_file,
+              line_engine: settingChoice(stored, "line_engine", ["hough", "trace"] as const, prev.line_engine),
+              line_connect: settingChoice(
+                stored,
+                "line_connect",
+                ["conservative", "standard", "aggressive"] as const,
+                prev.line_connect,
+              ),
+              line_repair: settingChoice(stored, "line_repair", ["off", "conservative"] as const, prev.line_repair),
+              line_export_source: settingChoice(
+                stored,
+                "line_export_source",
+                ["raw", "repaired", "ai_enhanced"] as const,
+                prev.line_export_source,
+              ),
+              line_bridge_gap_px: settingText(stored, "line_bridge_gap_px") || prev.line_bridge_gap_px,
+              line_close_gap_px: settingText(stored, "line_close_gap_px") || prev.line_close_gap_px,
+              ai_provider: settingChoice(
+                stored,
+                "ai_provider",
+                ["none", "openai-compatible", "qwen", "custom"] as const,
+                prev.ai_provider,
+              ),
+              ai_base_url: settingText(stored, "ai_base_url") || prev.ai_base_url,
+              ai_model: settingText(stored, "ai_model") || prev.ai_model,
+              ai_enhance: settingBool(stored, "ai_enhance", prev.ai_enhance),
+            });
+            formRef.current = next;
+            void refreshPreflight({
+              conversion_mode: next.conversion_mode,
+              export_dxf: next.export_dxf,
+            });
+            return next;
+          });
           void refreshHistory(root);
         })
         .catch(() => undefined);
@@ -527,6 +641,7 @@ export default function App() {
       try {
         const payload = {
           ...current,
+          skip_dongle_check: skipDongle,
           line_bridge_gap_px: current.line_bridge_gap_px.trim() || null,
           line_close_gap_px: current.line_close_gap_px.trim() || null,
           wait_timeout_seconds: parseInt(current.wait_timeout_seconds, 10) || 300,
@@ -536,7 +651,6 @@ export default function App() {
           source_dir: sourceDir,
           limit: limit.trim() ? parseInt(limit, 10) : null,
           retry_incomplete: retryIncomplete,
-          skip_dongle_check: skipDongle,
         });
         pushLog("info", `批量已开始：共 ${ack.count} 张图。`);
       } catch (error) {
@@ -611,7 +725,12 @@ export default function App() {
         const result = await engineCall<{ key_saved: boolean }>("save_settings", args);
         if (args.save_key !== undefined) setHasSavedKey(Boolean(result.key_saved));
         if (result.key_saved) setForm((prev) => ({ ...prev, ai_api_key: "" }));
-        pushToast("ok", "AI 设置已保存", result.key_saved ? "API Key 已用本机账户级加密保存。" : "设置已保存（Key 未保存，仅本次会话有效）。");
+        const keyMessage = result.key_saved
+          ? "API Key 已用本机账户级加密保存。"
+          : args.save_key === undefined && hasSavedKey
+            ? "连接设置已保存；继续使用本机已加密保存的 API Key。"
+            : "设置已保存（Key 未保存，仅本次会话有效）。";
+        pushToast("ok", "AI 设置已保存", keyMessage);
       } catch (error) {
         pushToast("error", "保存失败", String(error instanceof Error ? error.message : error));
       } finally {
@@ -620,6 +739,24 @@ export default function App() {
     },
     [hasSavedKey, pushToast],
   );
+
+  const saveRunParams = useCallback(async () => {
+    try {
+      await engineCall("save_settings", { settings: runParamSettings(formRef.current) });
+      pushToast("ok", "运行参数已保存", "下次打开会自动带回这些默认值；“覆盖已有输出”不会保存为默认。");
+    } catch (error) {
+      pushToast("error", "保存失败", String(error instanceof Error ? error.message : error));
+    }
+  }, [pushToast]);
+
+  const saveAdvancedParams = useCallback(async () => {
+    try {
+      await engineCall("save_settings", { settings: advancedParamSettings(formRef.current) });
+      pushToast("ok", "高级参数已保存", "下次打开会自动带回这些默认值；文字候选覆盖路径不会保存为默认。");
+    } catch (error) {
+      pushToast("error", "保存失败", String(error instanceof Error ? error.message : error));
+    }
+  }, [pushToast]);
 
   const restart = useCallback(() => {
     setEngineState("starting");
@@ -683,8 +820,15 @@ export default function App() {
   }, [pushLog, pushToast, restart]);
 
   const updateForm = useCallback((patch: Partial<RunForm>) => {
-    setForm((prev) => ({ ...prev, ...patch }));
-    if (patch.conversion_mode) void refreshPreflight(patch.conversion_mode);
+    const next = normalizeOutputSelection(formRef.current, patch);
+    formRef.current = next;
+    setForm(next);
+    if ("conversion_mode" in patch || "export_dxf" in patch) {
+      void refreshPreflight({
+        conversion_mode: next.conversion_mode,
+        export_dxf: next.export_dxf,
+      });
+    }
   }, [refreshPreflight]);
 
   const copyDiagnostics = useCallback(() => {
@@ -705,33 +849,55 @@ export default function App() {
     );
   }, [appVersion, preflightData, summary, logs, pushToast]);
 
+  const showHelp = useCallback(() => {
+    window.alert(
+      [
+        "GeoScan —— 扫描地质图半自动矢量化工具。",
+        "所有候选保持 checked=no，AI 仅复核建议，最终以人工复核为准。",
+        "",
+        "作者：keros68",
+        "项目仓库：https://github.com/keros68/geoscan",
+        "邮箱：keros68@gmal.com",
+      ].join("\n"),
+    );
+  }, []);
+
   const busy = running || batchRunning;
 
   return (
     <div className="app">
-      <MenuBar
-        busy={busy}
-        onOpenImage={chooseImage}
-        onOpenOutput={openOutput}
-        onStart={startRun}
-        onStop={stopRun}
-        onPreflight={() => void refreshPreflight()}
-        onAutodetect={() => setSettingsOpen(true)}
-        onSettings={() => setSettingsOpen(true)}
-        onAdvanced={() => {
-          setAdvancedOpen(true);
-          setAdvancedFocusTick((tick) => tick + 1);
-        }}
-        onCheckUpdate={checkUpdate}
-        onCopyDiagnostics={copyDiagnostics}
-      />
       <Toolbar
         form={form}
         busy={busy}
         engineReady={engineState === "ok"}
+        inspectorVisible={inspectorVisible}
         onOpenImage={chooseImage}
         onChooseOutputParent={chooseOutputParent}
         onPreflight={() => void refreshPreflight()}
+        onRunParams={() => {
+          setInspectorVisible(true);
+          setRunParamsOpen(true);
+          setRunParamsFocusTick((tick) => tick + 1);
+        }}
+        onAdvanced={() => {
+          setInspectorVisible(true);
+          setAdvancedOpen(true);
+          setAdvancedFocusTick((tick) => tick + 1);
+        }}
+        onBatch={() => {
+          setInspectorVisible(true);
+          setBatchOpen(true);
+          setBatchFocusTick((tick) => tick + 1);
+        }}
+        onAiSettings={() => {
+          setInspectorVisible(true);
+          setAiOpen(true);
+          setAiFocusTick((tick) => tick + 1);
+        }}
+        onToggleInspector={() => setInspectorVisible((visible) => !visible)}
+        onSettings={() => setSettingsOpen(true)}
+        onCheckUpdate={checkUpdate}
+        onHelp={showHelp}
         onStart={startRun}
         onStop={stopRun}
         onUpdateForm={updateForm}
@@ -756,41 +922,52 @@ export default function App() {
           onToggleTexts={() => setShowTexts((v) => !v)}
           onOpenImage={chooseImage}
         />
-        <Inspector
-          form={form}
-          outputRoot={selectedRoot || outputRoot}
-          preflight={preflightData}
-          summary={summary}
-          busy={busy}
-          advancedOpen={advancedOpen}
-          advancedFocusTick={advancedFocusTick}
-          onToggleAdvanced={setAdvancedOpen}
-          onUpdateForm={updateForm}
-          onSetMapId={setMapId}
-          onChooseOutputParent={chooseOutputParent}
-          onPreflight={() => void refreshPreflight()}
-          onOpenOutput={openOutput}
-          onCopyDiagnostics={copyDiagnostics}
-        />
+        {inspectorVisible && (
+          <Inspector
+            form={form}
+            outputRoot={selectedRoot || outputRoot}
+            preflight={preflightData}
+            summary={summary}
+            busy={busy}
+            runParamsOpen={runParamsOpen}
+            runParamsFocusTick={runParamsFocusTick}
+            advancedOpen={advancedOpen}
+            advancedFocusTick={advancedFocusTick}
+            batchOpen={batchOpen}
+            batchFocusTick={batchFocusTick}
+            aiOpen={aiOpen}
+            aiFocusTick={aiFocusTick}
+            batchRunning={batchRunning}
+            hasSavedKey={hasSavedKey}
+            aiBusy={aiBusy || busy}
+            onToggleRunParams={setRunParamsOpen}
+            onToggleAdvanced={setAdvancedOpen}
+            onToggleBatch={setBatchOpen}
+            onToggleAi={setAiOpen}
+            onCollapse={() => setInspectorVisible(false)}
+            onUpdateForm={updateForm}
+            onSetMapId={setMapId}
+            onChooseOutputParent={chooseOutputParent}
+            onPreflight={() => void refreshPreflight()}
+            onStartBatch={startBatch}
+            onStopBatch={stopRun}
+            onTestAi={() => void testAi()}
+            onAnalyzeAi={() => void analyzeAi()}
+            onSaveAiSettings={(saveKey) => void saveAiSettings(saveKey)}
+            onSaveRunParams={() => void saveRunParams()}
+            onSaveAdvancedParams={() => void saveAdvancedParams()}
+          />
+        )}
       </div>
       <BottomDock
         tab={dockTab}
         onTab={setDockTab}
         logs={logs}
         summary={summary}
-        batchRows={batchRows}
-        batchRunning={batchRunning}
         preflight={preflightData}
         stderrLines={stderrLines}
-        form={form}
-        hasSavedKey={hasSavedKey}
-        aiBusy={aiBusy || busy}
-        onUpdateForm={updateForm}
-        onTestAi={() => void testAi()}
-        onAnalyzeAi={() => void analyzeAi()}
-        onSaveAiSettings={(saveKey) => void saveAiSettings(saveKey)}
-        onStartBatch={startBatch}
-        onStopBatch={stopRun}
+        onOpenOutput={openOutput}
+        onCopyDiagnostics={copyDiagnostics}
         onOpenPath={(path) => void engineCall("open_path", { path }).catch(() => undefined)}
       />
       <StatusBar

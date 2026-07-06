@@ -1,12 +1,15 @@
-"""PyInstaller entry point for the standalone MapGIS semi-auto vectorization GUI.
+"""PyInstaller entry point for the frozen GeoScan engine executable.
 
-``GeoScan.exe``          -> starts the classic tkinter GUI
 ``GeoScan.exe --engine`` -> JSONL engine host on stdio (spawned by the
 Tauri console shell ``GeoScanConsole.exe``; same as
 ``python -m geoscan.engine_host``)
 ``GeoScan.exe --check``  -> headless startup check (build smoke test)
 ``GeoScan.exe --batch ...`` -> command-line batch runner (same args
 as ``python -m geoscan.batch_runner run``)
+
+GeoScan.exe has no UI of its own (the classic tkinter GUI was removed):
+run with no arguments (double-click) it hands over to the sibling
+``GeoScanConsole.exe``.
 """
 
 from __future__ import annotations
@@ -78,10 +81,13 @@ def main() -> int:
             "\n".join(
                 [
                     "Usage:",
-                    "  GeoScan.exe",
                     "  GeoScan.exe --engine",
                     "  GeoScan.exe --check",
                     "  GeoScan.exe --batch --project-root <workdir> --source-dir <tiff-folder> [options]",
+                    "",
+                    "GeoScan.exe is the engine executable and has no UI of its own;",
+                    "the user interface is GeoScanConsole.exe. Run with no arguments",
+                    "it launches the sibling GeoScanConsole.exe if present.",
                     "",
                     "Batch options are the same as:",
                     "  python -m geoscan.batch_runner run --help",
@@ -92,7 +98,6 @@ def main() -> int:
     if argv and argv[0] == "--check":
         import geoscan
         from geoscan.app_settings import bootstrap_settings
-        from geoscan.production_gui import ProductionGui
 
         # Exercise the compiled cv2 extension for real. A broken bundle (or a
         # stale cv2/ left over from an older install) can still satisfy
@@ -108,21 +113,48 @@ def main() -> int:
             raise RuntimeError("cv2 self-check returned wrong shape")
 
         bootstrap_settings()
-        app = ProductionGui()
-        app.destroy()
+        # Import the real app modules the console engine runs on — proves the
+        # loose engine layer resolves end to end without spinning up any UI.
+        from geoscan import engine_host, run_form
+
+        for _module in (engine_host, run_form):
+            if not getattr(_module, "__file__", None):
+                raise RuntimeError(f"{_module.__name__} did not resolve to a file")
+
         # Report where geoscan loaded from — confirms the loose engine layer is
         # active (path under .../engine/geoscan) and its version.
-        print(f"GUI startup check passed (geoscan {geoscan.__version__} @ {geoscan.__file__})")
+        print(f"startup check passed (geoscan {geoscan.__version__} @ {geoscan.__file__})")
         return 0
     if argv and argv[0] == "--batch":
         from geoscan.batch_runner import main as batch_main
 
         return batch_main(["run", *argv[1:]])
 
-    from geoscan.production_gui import main as gui_main
+    # No-args (double-click): the classic tkinter GUI is gone — hand over to
+    # the console shell installed next to this exe.
+    if getattr(sys, "frozen", False):
+        console = Path(sys.executable).resolve().parent / "GeoScanConsole.exe"
+        if console.is_file():
+            import subprocess
 
-    gui_main()
-    return 0
+            subprocess.Popen(
+                [str(console)],
+                cwd=str(console.parent),
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                close_fds=True,
+            )
+            return 0
+    import ctypes
+
+    ctypes.windll.user32.MessageBoxW(
+        None,
+        "GeoScan 的界面是 GeoScanConsole.exe（控制台），请从开始菜单或桌面的"
+        " GeoScan 快捷方式启动。\n\n"
+        "GeoScan.exe 本身没有界面，只作为引擎使用（--engine / --batch / --check）。",
+        "GeoScan",
+        0x30,  # MB_ICONWARNING
+    )
+    return 2
 
 
 if __name__ == "__main__":

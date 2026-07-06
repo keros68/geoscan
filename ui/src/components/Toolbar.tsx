@@ -4,9 +4,18 @@ interface Props {
   form: RunForm;
   busy: boolean;
   engineReady: boolean;
+  inspectorVisible: boolean;
   onOpenImage: () => void;
   onChooseOutputParent: () => void;
   onPreflight: () => void;
+  onRunParams: () => void;
+  onAdvanced: () => void;
+  onBatch: () => void;
+  onAiSettings: () => void;
+  onToggleInspector: () => void;
+  onSettings: () => void;
+  onCheckUpdate: () => void;
+  onHelp: () => void;
   onStart: () => void;
   onStop: () => void;
   onUpdateForm: (patch: Partial<RunForm>) => void;
@@ -31,6 +40,21 @@ export default function Toolbar(props: Props) {
       <button className="btn" onClick={props.onPreflight}>
         预检
       </button>
+      <button className="btn" onClick={props.onRunParams}>
+        运行参数
+      </button>
+      <button className="btn" onClick={props.onAdvanced}>
+        高级参数
+      </button>
+      <button className="btn" onClick={props.onAiSettings}>
+        AI设置
+      </button>
+      <button className="btn" onClick={props.onBatch}>
+        批量
+      </button>
+      <button className="btn" onClick={props.onToggleInspector}>
+        {props.inspectorVisible ? "隐藏右栏" : "显示右栏"}
+      </button>
       <div className="tool-sep" />
       <button className="btn primary" onClick={props.onStart} disabled={props.busy || !props.engineReady}>
         ▶ 开始
@@ -47,26 +71,20 @@ export default function Toolbar(props: Props) {
       >
         增强预览
       </button>
-      <button
-        className={`btn ${form.export_dxf ? "toggle-on" : ""}`}
-        title="导出 DXF/SHP 交换文件"
-        onClick={() => props.onUpdateForm({ export_dxf: !form.export_dxf })}
-        disabled={props.busy}
-      >
-        导出 DXF
-      </button>
-      <button
-        className={`btn ${form.conversion_mode === "cli" ? "toggle-on" : ""}`}
-        title="cli=自动转出 WT/WL（需要本机 MapGIS + 密码狗）；关闭后只生成候选和 DXF"
-        onClick={() => props.onUpdateForm({ conversion_mode: form.conversion_mode === "cli" ? "none" : "cli" })}
-        disabled={props.busy}
-      >
-        MapGIS 转换
-      </button>
       <div className="spring" />
       <span className="workspace" title={form.output_parent || "尚未选择工作目录"}>
         {form.output_parent ? `workspace: ${middleTruncate(form.output_parent)}` : "workspace: —"}
       </span>
+      <div className="tool-sep" />
+      <button className="btn" onClick={props.onSettings}>
+        本机设置
+      </button>
+      <button className="btn" onClick={props.onCheckUpdate}>
+        检查更新
+      </button>
+      <button className="btn" onClick={props.onHelp}>
+        帮助
+      </button>
     </div>
   );
 }

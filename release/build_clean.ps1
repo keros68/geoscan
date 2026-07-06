@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Phase 0 clean build of the MapGIS vectorization GUI (one-folder).
+  Phase 0 clean build of GeoScan (frozen Python engine + Tauri console).
 
 .DESCRIPTION
   Builds in a dedicated clean virtualenv containing ONLY the real runtime deps

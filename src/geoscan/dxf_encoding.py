@@ -15,15 +15,18 @@ def decode_dxf_unicode_escapes_for_mapgis(text: str) -> str:
     return decoded.replace(r"\~", " ")
 
 
-def make_dxf_mapgis_chinese_compatible(path: Path) -> None:
+def read_dxf_text(path: Path) -> str:
+    """Read a DXF with the encoding-fallback chain MapGIS files show up in."""
     for encoding in ("utf-8", "gbk", "cp1252", "latin1"):
         try:
-            text = path.read_text(encoding=encoding)
-            break
+            return path.read_text(encoding=encoding)
         except UnicodeDecodeError:
             continue
-    else:
-        text = path.read_text(encoding="utf-8", errors="replace")
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def make_dxf_mapgis_chinese_compatible(path: Path) -> None:
+    text = read_dxf_text(path)
     text = decode_dxf_unicode_escapes_for_mapgis(text)
     text = text.replace("ANSI_1252", "ANSI_936")
     path.write_text(text, encoding="gbk", errors="replace", newline="")

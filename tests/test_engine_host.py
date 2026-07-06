@@ -16,6 +16,7 @@ from geoscan.engine_host import (
     _StdoutToLog,
     form_state_from_args,
     load_candidates,
+    preflight,
     run_summary,
     stage_states_from_report,
     validate_form_state,
@@ -106,6 +107,30 @@ def test_validate_form_state_reports_first_error(tmp_path):
 
     bad_gap = dict(base, line_bridge_gap_px=-5)
     assert "不能为负数" in validate_form_state(form_state_from_args(bad_gap))
+
+
+def test_preflight_skips_unselected_output_tool_checks(monkeypatch):
+    """No MapGIS/DXF output selected means no MapGIS/GDAL probes should run."""
+    import geoscan.engine_host as engine_host
+    import geoscan.env_probe as env_probe
+    import geoscan.production_accuracy_workflow as accuracy
+
+    def fail_probe(*_args, **_kwargs):
+        raise AssertionError("unselected output category was probed")
+
+    monkeypatch.setattr(engine_host, "read_machine_settings", lambda: {})
+    monkeypatch.setattr(env_probe, "program_candidates", fail_probe)
+    monkeypatch.setattr(env_probe, "dongle_process_running", fail_probe)
+    monkeypatch.setattr(accuracy, "resolve_ogr2ogr", fail_probe)
+
+    report = preflight(conversion_mode="none", export_dxf=False)
+    checks = {check["key"]: check for check in report["checks"]}
+
+    assert report["overall"] != "blocked"
+    assert checks["section"]["state"] == "skip"
+    assert checks["w60"]["state"] == "skip"
+    assert checks["ogr2ogr"]["state"] == "skip"
+    assert checks["dongle"]["state"] == "skip"
 
 
 def test_stage_states_from_successful_report(tmp_path):

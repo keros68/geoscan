@@ -91,6 +91,8 @@ class BatchConfig:
     ai_api_key: str = ""
     ai_model: str = ""
     include_areas: bool = False
+    export_dxf: bool = True
+    qgis_files: bool = True
     ocr_python: Path | None = None
     retry_incomplete: bool = False
     limit: int | None = None
@@ -231,6 +233,20 @@ def run_batch(
         "rows": rows,
     }
 
+    def _finish_row(row: dict[str, Any], status: str | None = None) -> None:
+        """Seal one row: count it, notify, and rewrite the status files.
+
+        The per-map status rewrite is the resumability contract — every branch
+        that ends a map MUST go through here.
+        """
+        if status is not None:
+            row["status"] = status
+            counts[status] += 1
+        rows.append(row)
+        if progress:
+            progress(dict(row))
+        _write_status_files(batch_dir, rows, batch_report)
+
     executed = 0
     for source_raster in config.source_rasters:
         source_raster = Path(source_raster)
@@ -256,39 +272,24 @@ def run_batch(
             except (json.JSONDecodeError, OSError) as exc:
                 row["error"] = f"unreadable existing run report: {exc}"
             if not existing_conversion_failed:
-                row["status"] = "skipped_completed"
-                counts["skipped_completed"] += 1
-                rows.append(row)
-                if progress:
-                    progress(dict(row))
-                _write_status_files(batch_dir, rows, batch_report)
+                _finish_row(row, "skipped_completed")
                 continue
             if not config.retry_incomplete:
-                row["status"] = "incomplete_needs_attention"
                 row["error"] = (
                     "existing run report has conversion ok=false (failed W60/CLI bridge "
                     "conversion); rerun with --retry-incomplete to reset it deliberately"
                 )
-                counts["incomplete_needs_attention"] += 1
-                rows.append(row)
-                if progress:
-                    progress(dict(row))
-                _write_status_files(batch_dir, rows, batch_report)
+                _finish_row(row, "incomplete_needs_attention")
                 continue
 
         reset_output = False
         if output_root.exists() and any(output_root.iterdir()):
             if not config.retry_incomplete:
-                row["status"] = "incomplete_needs_attention"
                 row["error"] = (
                     "output folder exists without PROGRAM_RUN_REPORT.json (crashed/partial "
                     "run); rerun with --retry-incomplete to reset it deliberately"
                 )
-                counts["incomplete_needs_attention"] += 1
-                rows.append(row)
-                if progress:
-                    progress(dict(row))
-                _write_status_files(batch_dir, rows, batch_report)
+                _finish_row(row, "incomplete_needs_attention")
                 continue
             reset_output = True
 
@@ -296,12 +297,7 @@ def run_batch(
         if stop_requested:
             batch_report["stopped_early"] = True
         if stop_requested or (config.limit is not None and executed >= config.limit):
-            row["status"] = "not_started"
-            counts["not_started"] += 1
-            rows.append(row)
-            if progress:
-                progress(dict(row))
-            _write_status_files(batch_dir, rows, batch_report)
+            _finish_row(row, "not_started")
             continue
 
         executed += 1
@@ -325,6 +321,8 @@ def run_batch(
                     line_repair=config.line_repair,
                     line_export_source=config.line_export_source,
                     ai_enhance=config.ai_enhance,
+                    export_dxf=config.export_dxf,
+                    qgis_files=config.qgis_files,
                     reset_output=reset_output,
                     wait_timeout_seconds=config.wait_timeout_seconds,
                     ocr_python=config.ocr_python,
@@ -354,10 +352,7 @@ def run_batch(
             counts["failed"] += 1
         row["elapsed_seconds"] = round(time.perf_counter() - start, 1)
         row["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
-        rows.append(row)
-        if progress:
-            progress(dict(row))
-        _write_status_files(batch_dir, rows, batch_report)
+        _finish_row(row)
 
     batch_report["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
     _write_status_files(batch_dir, rows, batch_report)

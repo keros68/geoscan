@@ -145,7 +145,6 @@ def program_candidates(program_name: str) -> list[Path]:
 def _find_bootstrap_files(project_root: Path, limit: int = 20) -> list[Path]:
     candidates = []
     candidates.extend(_env_path("MAPGIS67_BOOTSTRAP_FILE", "SECTION_BOOTSTRAP_FILE"))
-    candidates.append(Path(__file__).resolve().parents[0] / "section_bootstrap" / "SECTION_BOOTSTRAP.WT")
     candidates.append(DEFAULT_BOOTSTRAP_FILE)
 
     search_roots = [project_root]
@@ -328,8 +327,9 @@ def build_environment_report(
 
 
 def write_report(path: Path, report: Mapping[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    from geoscan.candidates import write_json
+
+    write_json(path, dict(report))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

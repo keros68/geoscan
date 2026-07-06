@@ -102,6 +102,47 @@ def test_bridge_rejects_sideways_jump_between_parallel_lines() -> None:
     assert report["rejected_angle"] >= 1
 
 
+def test_dark_coverage_mask_fast_path_matches_loop_exactly() -> None:
+    """Property test: the precomputed dark-proximity mask path of
+    dark_coverage_px must reproduce the per-sample window-slicing loop
+    EXACTLY — including image borders (cv2.dilate border handling) and
+    sample points outside the raster (clamped windows can still overlap)."""
+    from geoscan.line_connectivity import dark_coverage_px, dark_proximity_mask
+
+    rng = np.random.default_rng(20260706)
+    height, width = 60, 80
+    for image_index in range(20):
+        # Values concentrated around the 140 threshold so single-pixel
+        # differences flip individual samples; plus solid white/black patches.
+        gray = rng.integers(132, 150, size=(height, width), dtype=np.uint8)
+        gray[10:20, 0:30] = 255
+        gray[30:34, 40:80] = 0
+        segments = [
+            ((0.0, 0.0), (width - 1.0, 0.0)),  # along the top border
+            ((0.0, height - 1.0), (width - 1.0, height - 1.0)),  # bottom border
+            ((-6.0, -4.0), (width + 5.0, height + 3.0)),  # diagonal, ends outside
+            ((-1.0, 5.0), (-1.0, height - 5.0)),  # just outside: window still overlaps
+            ((-30.0, -30.0), (-10.0, -40.0)),  # fully outside the raster
+            ((10.5, 20.5), (30.5, 20.5)),  # .5 coords: rounding ties
+            ((12.0, 12.0), (12.0, 12.0)),  # zero-length gap
+        ]
+        for _ in range(6):
+            segments.append(
+                (
+                    (float(rng.uniform(-10, width + 10)), float(rng.uniform(-10, height + 10))),
+                    (float(rng.uniform(-10, width + 10)), float(rng.uniform(-10, height + 10))),
+                )
+            )
+        for window, threshold in ((2, 140), (3, 140), (2, 100)):
+            mask = dark_proximity_mask(gray, window=window, threshold=threshold)
+            for a, b in segments:
+                slow = dark_coverage_px(gray, a, b, dark_threshold=threshold, window=window)
+                fast = dark_coverage_px(
+                    gray, a, b, dark_threshold=threshold, window=window, dark_mask=mask
+                )
+                assert fast == slow, (image_index, window, threshold, a, b)
+
+
 def test_conservative_profile_never_bridges() -> None:
     features, gray = _collinear_pair_with_gap()
     profile = resolve_connectivity_profile("conservative")

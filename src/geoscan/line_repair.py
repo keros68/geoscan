@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 
 Point: TypeAlias = tuple[float, float]
@@ -407,24 +407,30 @@ def close_axis_aligned_rectangles(
     max_width: float | None = None,
     max_height: float | None = None,
     min_present_sides: int = 4,
+    closures: list[dict[str, Any]] | None = None,
 ) -> list[Segment]:
     """Complete large axis-aligned frame/table rectangles from strong side evidence.
 
     ``min_present_sides`` defaults to 4 to preserve the conservative historical behavior.
     Set it to 3 for cartographic frame/table passes where three evidenced sides are enough
     to infer the missing side.
+
+    ``closures`` lets a caller that already ran
+    ``find_axis_aligned_rectangle_closures`` with identical parameters reuse
+    that result instead of paying for the expensive search twice.
     """
-    closures = find_axis_aligned_rectangle_closures(
-        segments,
-        axis_tolerance=axis_tolerance,
-        corner_tolerance=corner_tolerance,
-        min_width=min_width,
-        min_height=min_height,
-        min_side_coverage=min_side_coverage,
-        max_width=max_width,
-        max_height=max_height,
-        min_present_sides=min_present_sides,
-    )
+    if closures is None:
+        closures = find_axis_aligned_rectangle_closures(
+            segments,
+            axis_tolerance=axis_tolerance,
+            corner_tolerance=corner_tolerance,
+            min_width=min_width,
+            min_height=min_height,
+            min_side_coverage=min_side_coverage,
+            max_width=max_width,
+            max_height=max_height,
+            min_present_sides=min_present_sides,
+        )
     rectangle_sides: set[Segment] = set()
     for closure in closures:
         rectangle_sides.update(closure["sides"])  # type: ignore[arg-type]

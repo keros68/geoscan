@@ -4,6 +4,10 @@
 
 它只产出**待核查**候选，不发明任何地质内容。每条线、每个文字候选都标记为 `unchecked`，需要人工在 MapGIS/QGIS 里逐个核对、修正、确认。工具不猜地质界线、不猜标注、不猜地层代码——它做的是"把扫描图转成可编辑草稿"，不是"自动读懂这张地质图"。
 
+作者：keros68
+项目仓库：[keros68/geoscan](https://github.com/keros68/geoscan)
+邮箱：keros68@gmal.com
+
 > 中文为主，English summary below.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -23,6 +27,7 @@
 - **线提取**：Hough 直线（默认）或中心线追踪（直线 + 曲线 + 闭合环）。
 - **文字候选**：OCR（rapidocr）或内置兜底区域检测器。
 - **DXF 导出**：经 GDAL/ogr2ogr 出 DXF，QGIS、MapGIS 或任意支持 DXF 的 GIS 都能装入。
+- **QGIS 对齐文件**：交付目录写出源 dpi 底图、同名 `.tfw` world file、毫米坐标 GeoJSON，QGIS 直接叠加查看。
 - **MapGIS 6.7 桥接**（需 Windows + MapGIS）：驱动 SECTION / W60_Conv 把 DXF 转成原生 `.WL` / `.WT`。
 - **人工看图增强底图**（锐化/对比度，几何不变）：只用于人工编辑时看得更清，从不参与 OCR/矢量化。
 - **GUI + 批量运行**：单张或整个文件夹，图形界面或命令行皆可。
@@ -32,7 +37,7 @@
 
 - **不发明地质内容**：不猜边界、不猜标注、不猜地层代码；所有候选一律 `unchecked`。
 - **AI 只做复审**：可以分类、提示、给建议，永远不写坐标、地质解释或 `checked=yes`。
-- **不把候选当成成果**：测试通过只证明代码路径正常，矢量化质量仍需人工在 MapGIS 里验收。
+- **不把候选当成成果**：测试通过只证明代码路径正常，矢量化质量最终以人工复核为准。
 - **不在本仓库存放任何地图数据**：不含地图影像、扫描件、标准文档、符号库或运行输出——这些是用户自己的资料，另存于独立数据工作区。
 - **不联网偷跑**：API Key 由用户自己配置，DPAPI 当前用户加密存储，永不进源码、设置文件或日志。
 
@@ -40,13 +45,14 @@
 
 ```text
 扫描地质图 (TIFF / JPG)
-  ↓  00 输入冻结 + 可选调平（写成 1px=1 MapGIS 单位的像素图）
+  ↓  00 输入冻结 + 可选调平（保留源图 dpi；内部另写像素单位预览图）
   ↓  04 线候选：Hough 直线 / 中心线追踪
   ↓  05 文字候选：OCR 或兜底检测器
-  ↓  DXF 导出（GeoJSON → DXF，经 ogr2ogr）
+  ↓  DXF / GeoJSON 导出（坐标缩放到图幅毫米单位，经 ogr2ogr）
+  ↓  QGIS 对齐文件（源 dpi TIFF + 同名 .tfw + 毫米坐标 GeoJSON，可选）
   ↓  08 SECTION/W60 桥接（可选，需 MapGIS）→ 校验过的 .WL / .WT
   ↓
-MAPGIS_LOAD_READY  ——  单一交付文件夹：像素底图 + .WL/.WT + 线/文字 DXF
+MAPGIS_LOAD_READY  ——  单一交付文件夹：源 dpi 底图 + .tfw + 毫米 GeoJSON/DXF + 可选 .WL/.WT
 ```
 
 每次运行都从原始图像重新生成全部结果，绝不回喂旧候选。
@@ -66,7 +72,7 @@ MAPGIS_LOAD_READY  ——  单一交付文件夹：像素底图 + .WL/.WT + 线/
 ### 开发者
 
 ```bash
-pip install -e ".[dev,ocr,gui]"
+pip install -e ".[dev,ocr]"
 pytest
 ```
 
@@ -77,8 +83,8 @@ python -m geoscan.production_program run --source-raster <path>\t01_XXXX.tif --m
 # 批量处理一个文件夹（可续跑）
 python -m geoscan.batch_runner run --project-root <workdir> --source-dir <tiff-folder> --conversion-mode cli
 
-# 图形界面
-python -m geoscan.production_gui
+# 图形界面（Tauri 控制台，开发模式；需要 Node + Rust/MSVC）
+cd ui && npm run tauri dev
 ```
 
 维护者出安装包 + 发布新版（喂给自动更新）的完整流程见 [`release/README.md`](release/README.md)。
@@ -86,7 +92,7 @@ python -m geoscan.production_gui
 ## 环境依赖
 
 - Python 3.12+，`numpy`、`opencv-python-headless`、`pillow`。
-- 可选：`rapidocr` + `onnxruntime`（OCR）、`pywin32`（MapGIS 桥接，Windows）、`sv-ttk`（GUI 主题）。
+- 可选：`rapidocr` + `onnxruntime`（OCR）、`pywin32`（MapGIS 桥接，Windows）。
 - DXF 导出需要 GDAL/ogr2ogr（构建时打包，见 `release/`）。
 - MapGIS 桥接额外需要本机 MapGIS 6.7（含 SECTION）及其硬件加密狗——仅 DXF → `.WL`/`.WT` 这一步用到。
 

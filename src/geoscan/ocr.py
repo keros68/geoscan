@@ -10,7 +10,7 @@ import numpy as np
 from PIL import Image
 
 from .candidates import feature, feature_collection
-from .raster import image_point_to_map_point, load_rgb
+from .raster import image_point_to_map_point, load_rgb, rgb_to_bgr
 
 
 def merge_ocr_results(payload: dict[str, Any], results: dict[str, dict[str, Any]], *, engine_name: str) -> dict[str, Any]:
@@ -328,7 +328,11 @@ def run_direct_ocr_on_raster(
 ) -> dict[str, Any]:
     rgb = load_rgb(input_path)
     ocr_engine, engine_name = _load_rapidocr()
-    raw = ocr_engine(str(input_path))
+    # Reuse the already-decoded raster instead of letting the OCR engine re-read
+    # input_path from disk. RapidOCR's LoadImage passes ndarray input through
+    # unchanged (only str/Path/bytes/PIL.Image get RGB->BGR conversion), so it
+    # must be handed BGR here to match what it would have decoded from the file.
+    raw = ocr_engine(rgb_to_bgr(rgb))
     features = direct_ocr_features_from_output(
         raw,
         rgb=rgb,

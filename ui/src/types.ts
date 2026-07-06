@@ -51,6 +51,7 @@ export interface RunForm {
   line_bridge_gap_px: string;
   line_close_gap_px: string;
   export_dxf: boolean;
+  qgis_files: boolean;
   wait_timeout_seconds: string;
   target_line_file: string;
   target_text_file: string;

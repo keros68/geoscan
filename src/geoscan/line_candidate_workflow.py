@@ -86,11 +86,15 @@ def generate_review_line_candidates(
         note = "Review-only WL line candidates generated from deterministic Hough line extraction."
 
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    # One lazily-built dark-proximity mask per (window, threshold) actually
+    # sampled, shared by the box and bridge passes (identical results, far
+    # fewer raster reads).
+    dark_masks: dict[tuple[int, int], Any] = {}
     # Raster-evidence box regularization first: broken legend-box strokes are
     # replaced by one clean rectangle each and parked in a sidecar file, so
     # the closure/bridge passes below never waste work on those fragments.
     features, box_rectangles, box_superseded, box_report = regularize_small_boxes(
-        features, gray, profile=profile
+        features, gray, profile=profile, dark_masks=dark_masks
     )
     if box_superseded:
         write_geojson(
@@ -102,7 +106,7 @@ def generate_review_line_candidates(
         features, profile=profile
     )
     bridge_features, bridge_report = bridge_line_candidates(
-        features, gray, profile=profile
+        features, gray, profile=profile, dark_masks=dark_masks
     )
     features = features + box_rectangles + closure_features + bridge_features
     write_geojson(output_geojson, features)
