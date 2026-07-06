@@ -603,9 +603,20 @@ def preflight(conversion_mode: str = "cli", export_dxf: bool = True) -> dict[str
 
     ogr_state, ogr_detail = "missing", ""
     try:
+        from geoscan.production_accuracy_workflow import bundled_gdal_dir
+
         ogr = Path(resolve_ogr2ogr())
         if ogr.is_file():
             ogr_state, ogr_detail = "ok", str(ogr)
+        else:
+            # Say WHAT was tried, so a remote screenshot is diagnosable:
+            # a stale configured path vs. a missing bundled gdal\ folder.
+            tried = [f"已试 {ogr}"]
+            if getattr(sys, "frozen", False) and bundled_gdal_dir() is None:
+                tried.append("安装目录缺少 gdal\\（重新安装可恢复）")
+            else:
+                tried.append("到设置里选择本机 QGIS 的 ogr2ogr.exe，或清掉失效的旧路径")
+            ogr_detail = "未找到；" + "；".join(tried)
     except Exception as exc:  # resolver may raise on odd setups
         ogr_detail = str(exc)
     if not export_dxf and ogr_state != "ok":

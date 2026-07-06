@@ -394,6 +394,32 @@ def test_engine_host_run_single_rejects_invalid_form():
     assert "输入图片" in reply["error"]
 
 
+def test_resolve_ogr2ogr_stale_env_path_falls_back_to_bundle(monkeypatch, tmp_path):
+    """A saved/env ogr2ogr path that no longer exists must not shadow the
+    bundled gdal/ next to the frozen exe (colleague-machine regression)."""
+    from geoscan import production_accuracy_workflow as paw
+
+    bundle = tmp_path / "gdal"
+    bundle.mkdir()
+    (bundle / "ogr2ogr.exe").write_bytes(b"x")
+    monkeypatch.setattr(paw, "bundled_gdal_dir", lambda: bundle)
+
+    monkeypatch.setenv("MAPGIS_OGR2OGR", str(tmp_path / "uninstalled_qgis" / "ogr2ogr.exe"))
+    assert paw.resolve_ogr2ogr() == bundle / "ogr2ogr.exe"
+
+    # A VALID configured path still wins over the bundle.
+    real = tmp_path / "qgis_ogr2ogr.exe"
+    real.write_bytes(b"x")
+    monkeypatch.setenv("MAPGIS_OGR2OGR", str(real))
+    assert paw.resolve_ogr2ogr() == real
+
+    # No bundle + stale env: surface the configured path for the error message.
+    monkeypatch.setattr(paw, "bundled_gdal_dir", lambda: None)
+    stale = tmp_path / "uninstalled_qgis" / "ogr2ogr.exe"
+    monkeypatch.setenv("MAPGIS_OGR2OGR", str(stale))
+    assert paw.resolve_ogr2ogr() == stale
+
+
 def test_apply_engine_update_flow(monkeypatch, tmp_path):
     import types
 

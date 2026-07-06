@@ -39,15 +39,24 @@ def bundled_gdal_dir() -> Path | None:
 
 
 def resolve_ogr2ogr(path: Path | None = None) -> Path:
-    """Explicit argument -> MAPGIS_OGR2OGR env var -> bundled gdal/ -> known QGIS default."""
+    """Explicit argument -> MAPGIS_OGR2OGR env var -> bundled gdal/ -> known QGIS default.
+
+    A configured path that no longer exists (stale saved settings pointing at
+    an uninstalled QGIS) must not SHADOW the bundled gdal/ next to the frozen
+    exe — fall through instead, so a machine with the bundle always works.
+    """
     if path is not None:
         return Path(path)
     env_value = os.environ.get(OGR2OGR_ENV_VAR, "").strip()
-    if env_value:
+    if env_value and Path(env_value).is_file():
         return Path(env_value)
     bundled = bundled_gdal_dir()
     if bundled is not None:
         return bundled / "ogr2ogr.exe"
+    if env_value:
+        # Nothing better exists; surface the configured (broken) path so the
+        # caller's error message points at what the user actually set.
+        return Path(env_value)
     return DEFAULT_OGR2OGR
 
 
