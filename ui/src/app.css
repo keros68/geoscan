@@ -786,6 +786,29 @@ textarea {
   margin-top: 2px;
 }
 
+.insp-section.adv-flash {
+  animation: adv-flash 1.4s ease;
+}
+
+@keyframes adv-flash {
+  0%,
+  30% {
+    background: var(--blue-soft);
+    box-shadow: inset 3px 0 0 var(--blue);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .insp-section.adv-flash {
+    animation: none;
+    background: var(--blue-soft);
+  }
+}
+
 /* ---------------- AI panel (bottom dock) ---------------- */
 .ai-panel {
   display: flex;

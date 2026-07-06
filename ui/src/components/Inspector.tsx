@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Preflight, RunForm, RunSummary } from "../types";
 
@@ -9,6 +9,7 @@ interface Props {
   summary: RunSummary | null;
   busy: boolean;
   advancedOpen: boolean;
+  advancedFocusTick: number;
   onToggleAdvanced: (open: boolean) => void;
   onUpdateForm: (patch: Partial<RunForm>) => void;
   onSetMapId: (mapId: string) => void;
@@ -27,11 +28,23 @@ const READINESS_TEXT = {
 export default function Inspector(props: Props) {
   const { form, preflight, summary } = props;
   const [showChecks, setShowChecks] = useState(false);
+  const advancedRef = useRef<HTMLDivElement>(null);
+  const [advancedFlash, setAdvancedFlash] = useState(false);
 
   // A blocked machine must not hide WHY — expand the checklist automatically.
   useEffect(() => {
     if (preflight?.overall === "blocked") setShowChecks(true);
   }, [preflight?.overall]);
+
+  // Opening via the menu is otherwise easy to miss in the side column:
+  // scroll the section into view and flash it.
+  useEffect(() => {
+    if (props.advancedFocusTick === 0) return;
+    advancedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setAdvancedFlash(true);
+    const timer = window.setTimeout(() => setAdvancedFlash(false), 1400);
+    return () => window.clearTimeout(timer);
+  }, [props.advancedFocusTick]);
 
   return (
     <div className="panel inspector">
@@ -150,7 +163,7 @@ export default function Inspector(props: Props) {
       </div>
 
       {/* 高级参数：直接在页面上可见可调，默认折叠 */}
-      <div className="insp-section">
+      <div className={`insp-section ${advancedFlash ? "adv-flash" : ""}`} ref={advancedRef}>
         <h3>
           <button className="section-toggle" onClick={() => props.onToggleAdvanced(!props.advancedOpen)}>
             {props.advancedOpen ? "▾" : "▸"} 高级参数
@@ -231,6 +244,19 @@ export default function Inspector(props: Props) {
               <div className="field-hint">
                 图例框/圈闭只差一个小口时，自动补上收口段的最大缺口。留空=按档位（标准12/积极20）；填 0=不收口；图例框仍有缺口就调大。
               </div>
+            </div>
+            <div className="checkbox-row">
+              <input
+                id="adv-ai-enhance"
+                type="checkbox"
+                checked={form.ai_enhance}
+                disabled={props.busy}
+                onChange={(event) => props.onUpdateForm({ ai_enhance: event.target.checked })}
+              />
+              <label htmlFor="adv-ai-enhance">启用 AI 增强（断线桥接提名 + OCR 纠错建议）</label>
+            </div>
+            <div className="field-hint" style={{ marginTop: -2 }}>
+              需线修复开启，并先在底部“AI（可选）”页配好连接；AI 只提名、栅格证据验证，结果全部 checked=no。
             </div>
             <div className="adv-subhead">转换与导出</div>
             <div className="field-grid">

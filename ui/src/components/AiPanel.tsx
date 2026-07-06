@@ -67,16 +67,6 @@ export default function AiPanel(props: Props) {
           />
           <label htmlFor="ai-savekey">在本机加密保存 API Key（Windows 账户级加密，拷给别人解不出来）</label>
         </div>
-        <div className="checkbox-row">
-          <input
-            id="ai-enhance"
-            type="checkbox"
-            checked={form.ai_enhance}
-            disabled={props.busy}
-            onChange={(event) => props.onUpdateForm({ ai_enhance: event.target.checked })}
-          />
-          <label htmlFor="ai-enhance">启用 AI 增强（断线桥接提名 + OCR 纠错建议；需线修复开启）</label>
-        </div>
         <div className="ai-actions">
           <button className="btn" onClick={() => props.onSave(saveKey)} disabled={props.busy}>
             保存 AI 设置
@@ -90,6 +80,7 @@ export default function AiPanel(props: Props) {
         </div>
       </div>
       <div className="ai-notes">
+        <p>此页只配置连接；“启用 AI 增强”开关在右侧“高级参数 → 线提取”里（属运行参数）。</p>
         <p>AI 只提名，程序算坐标并用栅格证据验证；结果写入全新增强层，raw/repaired 永不改动。</p>
         <p>AI 只写复核建议到 AI_VISUAL_REVIEW；不写最终坐标、不写 checked=yes。</p>
         <p>API Key 只在本机使用：不进日志、不进事件、不随设置文件同步。</p>

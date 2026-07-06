@@ -98,6 +98,9 @@ export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  // Bumped by the menu entry so the inspector scrolls to + flashes the
+  // advanced section even when it is already open.
+  const [advancedFocusTick, setAdvancedFocusTick] = useState(0);
   const [dockTab, setDockTab] = useState<DockTab>("log");
   const [appVersion, setAppVersion] = useState("");
   const [hasSavedKey, setHasSavedKey] = useState(false);
@@ -715,7 +718,10 @@ export default function App() {
         onPreflight={() => void refreshPreflight()}
         onAutodetect={() => setSettingsOpen(true)}
         onSettings={() => setSettingsOpen(true)}
-        onAdvanced={() => setAdvancedOpen(true)}
+        onAdvanced={() => {
+          setAdvancedOpen(true);
+          setAdvancedFocusTick((tick) => tick + 1);
+        }}
         onCheckUpdate={checkUpdate}
         onCopyDiagnostics={copyDiagnostics}
       />
@@ -757,6 +763,7 @@ export default function App() {
           summary={summary}
           busy={busy}
           advancedOpen={advancedOpen}
+          advancedFocusTick={advancedFocusTick}
           onToggleAdvanced={setAdvancedOpen}
           onUpdateForm={updateForm}
           onSetMapId={setMapId}
