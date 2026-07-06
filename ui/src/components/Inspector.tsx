@@ -161,6 +161,7 @@ export default function Inspector(props: Props) {
         </h3>
         {props.advancedOpen && (
           <>
+            <div className="adv-subhead">线提取</div>
             <div className="field-grid">
               <label htmlFor="adv-engine">线提取引擎</label>
               <select
@@ -230,6 +231,9 @@ export default function Inspector(props: Props) {
               <div className="field-hint">
                 图例框/圈闭只差一个小口时，自动补上收口段的最大缺口。留空=按档位（标准12/积极20）；填 0=不收口；图例框仍有缺口就调大。
               </div>
+            </div>
+            <div className="adv-subhead">转换与导出</div>
+            <div className="field-grid">
               <label htmlFor="adv-timeout">转换等待秒</label>
               <input
                 id="adv-timeout"
@@ -276,7 +280,8 @@ export default function Inspector(props: Props) {
               />
               <label htmlFor="adv-dxf">导出 DXF/SHP 交换文件</label>
             </div>
-            <div className="field-grid" style={{ marginTop: 4 }}>
+            <div className="adv-subhead">覆盖输入（专家）</div>
+            <div className="field-grid">
               <label>文字候选</label>
               <div style={{ display: "flex", gap: 4 }}>
                 <input

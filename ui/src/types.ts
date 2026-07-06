@@ -56,6 +56,12 @@ export interface RunForm {
   target_text_file: string;
   target_area_file: string;
   text_candidates: string;
+  // AI（可选，review-only）。api_key 仅会话内存在：留空时引擎自动用本机加密保存的 key。
+  ai_provider: "none" | "openai-compatible" | "qwen" | "custom";
+  ai_base_url: string;
+  ai_model: string;
+  ai_api_key: string;
+  ai_enhance: boolean;
   skip_dongle_check?: boolean;
 }
 

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { BatchRow, LogEntry, Preflight, RunSummary } from "../types";
+import { BatchRow, LogEntry, Preflight, RunForm, RunSummary } from "../types";
+import AiPanel from "./AiPanel";
 
-export type DockTab = "log" | "files" | "batch" | "diag";
+export type DockTab = "log" | "files" | "batch" | "ai" | "diag";
 
 interface Props {
   tab: DockTab;
@@ -13,6 +14,13 @@ interface Props {
   batchRunning: boolean;
   preflight: Preflight | null;
   stderrLines: string[];
+  form: RunForm;
+  hasSavedKey: boolean;
+  aiBusy: boolean;
+  onUpdateForm: (patch: Partial<RunForm>) => void;
+  onTestAi: () => void;
+  onAnalyzeAi: () => void;
+  onSaveAiSettings: (saveKey: boolean) => void;
   onStartBatch: (sourceDir: string, limit: string, retryIncomplete: boolean) => void;
   onStopBatch: () => void;
   onOpenPath: (path: string) => void;
@@ -34,6 +42,7 @@ export default function BottomDock(props: Props) {
     { key: "log", label: "日志" },
     { key: "files", label: "输出文件" },
     { key: "batch", label: "批量" },
+    { key: "ai", label: "AI（可选）" },
     { key: "diag", label: "诊断" },
   ];
 
@@ -179,6 +188,18 @@ export default function BottomDock(props: Props) {
               </table>
             )}
           </>
+        )}
+
+        {props.tab === "ai" && (
+          <AiPanel
+            form={props.form}
+            hasSavedKey={props.hasSavedKey}
+            busy={props.aiBusy}
+            onUpdateForm={props.onUpdateForm}
+            onTest={props.onTestAi}
+            onAnalyze={props.onAnalyzeAi}
+            onSave={props.onSaveAiSettings}
+          />
         )}
 
         {props.tab === "diag" && (

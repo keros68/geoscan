@@ -474,6 +474,82 @@ def test_apply_engine_update_rejects_when_not_engine_kind(monkeypatch):
     host._busy.release()
 
 
+def test_inject_saved_ai_key_only_when_form_has_none(monkeypatch, tmp_path):
+    import geoscan.engine_host as engine_host
+
+    monkeypatch.setattr(engine_host, "load_encrypted_api_key", lambda: "sk-stored")
+    base = {
+        "source_raster": str(tmp_path / "a.tif"),
+        "map_id": "A",
+        "project_root": str(tmp_path),
+        "output_parent": str(tmp_path),
+        "ai_provider": "openai-compatible",
+    }
+    state = engine_host.EngineHost._inject_saved_ai_key(form_state_from_args(base))
+    assert state.ai_api_key == "sk-stored"
+    # An explicit key in the form wins; provider none never injects.
+    explicit = engine_host.EngineHost._inject_saved_ai_key(
+        form_state_from_args(dict(base, ai_api_key="sk-form"))
+    )
+    assert explicit.ai_api_key == "sk-form"
+    none_provider = engine_host.EngineHost._inject_saved_ai_key(
+        form_state_from_args(dict(base, ai_provider="none"))
+    )
+    assert none_provider.ai_api_key == ""
+
+
+def test_save_settings_merges_with_stored(monkeypatch, tmp_path):
+    import geoscan.engine_host as engine_host
+
+    saved = {}
+    monkeypatch.setattr(
+        engine_host, "read_machine_settings", lambda: {"section_exe": "C:/mapgis/section.exe", "ai_model": "old"}
+    )
+    monkeypatch.setattr(engine_host, "save_settings", lambda s: saved.update(s) or (tmp_path / "s.json"))
+    monkeypatch.setattr(engine_host, "apply_settings_to_env", lambda s, override: {})
+
+    proto, sink = _make_proto()
+    host = EngineHost(proto)
+    host.handle({"id": 1, "cmd": "save_settings", "args": {"settings": {"ai_model": "new-model"}}})
+    assert sink.payloads()[0]["ok"] is True
+    # AI-only save keeps the tool path AND updates the AI field.
+    assert saved["section_exe"] == "C:/mapgis/section.exe"
+    assert saved["ai_model"] == "new-model"
+
+
+def test_test_ai_connection_validates_and_uses_saved_key(monkeypatch):
+    import geoscan.engine_host as engine_host
+
+    monkeypatch.setattr(engine_host, "load_encrypted_api_key", lambda: "sk-stored")
+    captured = {}
+
+    import geoscan.ai_vision_review as ai_review
+
+    monkeypatch.setattr(ai_review, "test_ai_connection", lambda config: captured.update(key=config.api_key) or {"api_url": "https://x/v1/chat/completions"})
+
+    proto, sink = _make_proto()
+    host = EngineHost(proto)
+    host.handle({"id": 1, "cmd": "test_ai_connection", "args": {"ai_provider": "none"}})
+    assert sink.payloads()[0]["ok"] is False  # provider required
+
+    host.handle(
+        {
+            "id": 2,
+            "cmd": "test_ai_connection",
+            "args": {
+                "ai_provider": "openai-compatible",
+                "ai_base_url": "https://api.siliconflow.cn/v1/chat/completions",
+                "ai_model": "Qwen/Qwen3-VL",
+            },
+        }
+    )
+    reply = next(p for p in sink.payloads() if p.get("id") == 2)
+    assert reply["ok"] is True
+    assert captured["key"] == "sk-stored"
+    # The key must never appear in the protocol stream.
+    assert "sk-stored" not in "".join(json.dumps(p) for p in sink.payloads())
+
+
 def test_engine_host_one_shot_pipe_gets_reply_before_exit():
     """A piped client that sends one request then EOF must still get the reply
     (main() joins in-flight request threads after stdin closes)."""

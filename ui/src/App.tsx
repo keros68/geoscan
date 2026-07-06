@@ -47,6 +47,11 @@ const DEFAULT_FORM: RunForm = {
   target_text_file: "",
   target_area_file: "",
   text_candidates: "",
+  ai_provider: "none",
+  ai_base_url: "",
+  ai_model: "",
+  ai_api_key: "",
+  ai_enhance: false,
 };
 
 const INITIAL_STAGES = Object.fromEntries(STAGE_ORDER.map((key) => [key, "pending"])) as Record<
@@ -95,6 +100,8 @@ export default function App() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [dockTab, setDockTab] = useState<DockTab>("log");
   const [appVersion, setAppVersion] = useState("");
+  const [hasSavedKey, setHasSavedKey] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
 
   // Refs so long-lived engine-event subscriptions see current values.
   const formRef = useRef(form);
@@ -191,12 +198,18 @@ export default function App() {
       if (version) setAppVersion(version);
       pushLog("info", `引擎已连接 (geoscan v${version || "?"})`);
       void engineCall("get_settings")
-        .then((settings: any) => {
-          const root = String(settings.project_root ?? "");
+        .then((data: any) => {
+          const root = String(data.project_root ?? "");
+          const stored = data.settings ?? {};
+          setHasSavedKey(Boolean(data.has_saved_key));
           setForm((prev) => ({
             ...prev,
             project_root: prev.project_root || root,
             output_parent: prev.output_parent || root,
+            ai_provider: (stored.ai_provider || prev.ai_provider) as RunForm["ai_provider"],
+            ai_base_url: stored.ai_base_url || prev.ai_base_url,
+            ai_model: stored.ai_model || prev.ai_model,
+            ai_enhance: String(stored.ai_enhance ?? "").toLowerCase() === "true" || prev.ai_enhance,
           }));
           void refreshHistory(root);
         })
@@ -531,6 +544,80 @@ export default function App() {
     [pushLog, pushToast],
   );
 
+  const testAi = useCallback(async () => {
+    const current = formRef.current;
+    setAiBusy(true);
+    try {
+      const result = await engineCall<{ api_url: string }>("test_ai_connection", {
+        ai_provider: current.ai_provider,
+        ai_base_url: current.ai_base_url,
+        ai_model: current.ai_model,
+        ai_api_key: current.ai_api_key,
+      });
+      pushToast("ok", "AI 连接成功", result.api_url);
+    } catch (error) {
+      pushToast("error", "AI 连接失败", String(error instanceof Error ? error.message : error));
+    } finally {
+      setAiBusy(false);
+    }
+  }, [pushToast]);
+
+  const analyzeAi = useCallback(async () => {
+    const current = formRef.current;
+    if (!current.source_raster) {
+      pushToast("warning", "还没有选择输入图片", "先在工具栏“打开影像”选择一张图，再做 AI 看图描述。");
+      return;
+    }
+    setAiBusy(true);
+    pushLog("info", "开始 AI 看图描述（仅诊断，不影响结果）…");
+    try {
+      const payload = {
+        ...current,
+        line_bridge_gap_px: current.line_bridge_gap_px.trim() || null,
+        line_close_gap_px: current.line_close_gap_px.trim() || null,
+        wait_timeout_seconds: parseInt(current.wait_timeout_seconds, 10) || 300,
+      };
+      const result = await engineCall<{ analysis_path: string }>("analyze_image", { form: payload });
+      pushLog("info", `AI 分析完成: ${result.analysis_path}`);
+      pushToast("ok", "AI 分析完成", `结果已写入:\n${result.analysis_path}`);
+    } catch (error) {
+      pushToast("error", "AI 分析失败", String(error instanceof Error ? error.message : error));
+    } finally {
+      setAiBusy(false);
+    }
+  }, [pushLog, pushToast]);
+
+  const saveAiSettings = useCallback(
+    async (saveKey: boolean) => {
+      const current = formRef.current;
+      setAiBusy(true);
+      try {
+        const args: Record<string, any> = {
+          settings: {
+            ai_provider: current.ai_provider,
+            ai_base_url: current.ai_base_url,
+            ai_model: current.ai_model,
+            ai_enhance: current.ai_enhance ? "true" : "",
+          },
+        };
+        // Only touch the stored key when the user asked to (or typed one).
+        if (current.ai_api_key.trim() || saveKey !== hasSavedKey) {
+          args.save_key = saveKey;
+          args.ai_api_key = current.ai_api_key;
+        }
+        const result = await engineCall<{ key_saved: boolean }>("save_settings", args);
+        if (args.save_key !== undefined) setHasSavedKey(Boolean(result.key_saved));
+        if (result.key_saved) setForm((prev) => ({ ...prev, ai_api_key: "" }));
+        pushToast("ok", "AI 设置已保存", result.key_saved ? "API Key 已用本机账户级加密保存。" : "设置已保存（Key 未保存，仅本次会话有效）。");
+      } catch (error) {
+        pushToast("error", "保存失败", String(error instanceof Error ? error.message : error));
+      } finally {
+        setAiBusy(false);
+      }
+    },
+    [hasSavedKey, pushToast],
+  );
+
   const restart = useCallback(() => {
     setEngineState("starting");
     bootstrappedRef.current = false;
@@ -688,6 +775,13 @@ export default function App() {
         batchRunning={batchRunning}
         preflight={preflightData}
         stderrLines={stderrLines}
+        form={form}
+        hasSavedKey={hasSavedKey}
+        aiBusy={aiBusy || busy}
+        onUpdateForm={updateForm}
+        onTestAi={() => void testAi()}
+        onAnalyzeAi={() => void analyzeAi()}
+        onSaveAiSettings={(saveKey) => void saveAiSettings(saveKey)}
         onStartBatch={startBatch}
         onStopBatch={stopRun}
         onOpenPath={(path) => void engineCall("open_path", { path }).catch(() => undefined)}

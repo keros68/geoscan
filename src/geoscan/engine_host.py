@@ -53,6 +53,7 @@ from geoscan.production_gui import (
     DEFAULT_LINE_REPAIR,
     GuiFormState,
     IMAGE_EXTENSIONS,
+    build_ai_config_from_gui,
     build_batch_config_from_gui,
     build_program_config_from_gui,
     completion_message_for_report,
@@ -691,7 +692,13 @@ class EngineHost:
         }
 
     def cmd_save_settings(self, args: dict[str, Any]) -> dict[str, Any]:
-        settings = {str(k): str(v) for k, v in (args.get("settings") or {}).items()}
+        # MERGE into the stored settings: a caller that only edits one page
+        # (e.g. the AI panel) must not wipe the tool paths saved by another.
+        # Validate only the keys THIS call provides — a stale stored path must
+        # not block saving an unrelated page.
+        provided = {str(k): str(v) for k, v in (args.get("settings") or {}).items()}
+        settings = dict(read_machine_settings())
+        settings.update(provided)
         missing = [
             (label, value)
             for label, key, must_be_dir in (
@@ -702,7 +709,8 @@ class EngineHost:
                 ("OCR 解释器", "ocr_python", False),
                 ("项目根目录", "project_root", True),
             )
-            if (value := settings.get(key, "").strip())
+            if key in provided
+            and (value := provided[key].strip())
             and not (Path(value).is_dir() if must_be_dir else Path(value).is_file())
         ]
         if missing:
@@ -861,6 +869,65 @@ class EngineHost:
         finally:
             self._busy.release()
 
+    def cmd_test_ai_connection(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Probe the configured AI endpoint. Never echoes the key anywhere."""
+        from geoscan.ai_vision_review import (
+            AiVisionConfig,
+            normalize_chat_completions_url,
+            test_ai_connection,
+        )
+
+        provider = str(args.get("ai_provider") or "none").strip()
+        base_url = str(args.get("ai_base_url") or "").strip()
+        model = str(args.get("ai_model") or "").strip()
+        api_key = str(args.get("ai_api_key") or "").strip() or load_encrypted_api_key()
+        if provider == "none":
+            raise ValueError("请先选择 Provider。")
+        if not base_url:
+            raise ValueError("请填写 AI Base URL。")
+        if not api_key:
+            raise ValueError("请填写 API Key（或先加密保存一个）。")
+        if not model:
+            raise ValueError("请填写 AI Model。")
+        api_url = normalize_chat_completions_url(base_url)
+        config = AiVisionConfig(
+            provider=provider,
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            timeout_seconds=30,
+        )
+        report = test_ai_connection(config)
+        return {"api_url": str(report.get("api_url") or api_url)}
+
+    def cmd_analyze_image(self, args: dict[str, Any]) -> dict[str, Any]:
+        """AI 看图描述（诊断用，写入 AI_VISUAL_REVIEW，不影响结果）。"""
+        from geoscan.ai_vision_review import analyze_map_image_with_ai
+
+        form = dict(args.get("form") or {})
+        state = self._inject_saved_ai_key(form_state_from_args(form))
+        if state.ai_provider == "none":
+            raise ValueError("请先在 AI 页选择 Provider。")
+        if not (state.ai_base_url and state.ai_api_key and state.ai_model):
+            raise ValueError("AI 页的 Base URL / API Key / Model 都必须填写。")
+        error = validate_form_state(state)
+        if error:
+            raise ValueError(error)
+        if not self._busy.acquire(blocking=False):
+            raise ValueError("已有任务在运行；请先停止或等待完成。")
+        try:
+            output_root = default_output_root_from_parent(state.output_parent, state.map_id)
+            config = build_ai_config_from_gui(state)
+            report = analyze_map_image_with_ai(
+                config,
+                image_path=state.source_raster,
+                output_root=output_root,
+                map_id=state.map_id,
+            )
+            return {"analysis_path": str(report.get("analysis_path") or "")}
+        finally:
+            self._busy.release()
+
     def cmd_stop(self, args: dict[str, Any]) -> dict[str, Any]:
         self._stop_single.set()
         self._stop_batch.set()
@@ -871,9 +938,18 @@ class EngineHost:
         )
         return {"stopping": True}
 
+    @staticmethod
+    def _inject_saved_ai_key(state: GuiFormState) -> GuiFormState:
+        """The console never holds the API key — when the form carries none,
+        use the DPAPI-stored one so AI features work off the saved key."""
+        if state.ai_api_key.strip() or state.ai_provider == "none":
+            return state
+        saved = load_encrypted_api_key()
+        return replace(state, ai_api_key=saved) if saved else state
+
     def cmd_run_single(self, args: dict[str, Any]) -> dict[str, Any]:
         form = dict(args.get("form") or {})
-        state = form_state_from_args(form)
+        state = self._inject_saved_ai_key(form_state_from_args(form))
         error = validate_form_state(state)
         if error:
             raise ValueError(error)
@@ -953,7 +1029,7 @@ class EngineHost:
         from geoscan.batch_runner import run_batch
 
         form = dict(args.get("form") or {})
-        state = form_state_from_args(form)
+        state = self._inject_saved_ai_key(form_state_from_args(form))
         if state.line_export_source == "repaired" and state.line_repair == "off":
             raise ValueError("导出线层选 repaired 时，必须同时把线修复设为 conservative。")
         source_dir = Path(str(args.get("source_dir") or ""))
