@@ -95,9 +95,15 @@ class Protocol:
 
     def send(self, payload: dict[str, Any]) -> None:
         text = json.dumps(payload, ensure_ascii=False, default=str)
-        with self._lock:
-            self._stream.write(text + "\n")
-            self._stream.flush()
+        try:
+            with self._lock:
+                self._stream.write(text + "\n")
+                self._stream.flush()
+        except OSError:
+            # The protocol peer is gone (shell closed / handle invalid). A host
+            # without its channel is useless and every further send would raise
+            # in some worker thread — exit instead of limping on.
+            os._exit(3)
 
     def reply(self, request_id: Any, data: dict[str, Any]) -> None:
         self.send({"id": request_id, "ok": True, "data": data})
@@ -793,7 +799,56 @@ class EngineHost:
             "kind": info.kind,
             "download_size": info.download_size,
             "notes": info.notes,
+            "html_url": info.html_url,
         }
+
+    def _update_progress(self, done: int, total: int) -> None:
+        self.proto.event("update_progress", done=done, total=total)
+
+    def cmd_apply_engine_update(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Lightweight update: swap the loose engine in place.
+
+        The engine PROCESS keeps running old code after this returns — the
+        shell must restart the engine (engine_restart) to load the new code.
+        The console window itself never restarts.
+        """
+        from geoscan import updater
+
+        if not self._busy.acquire(blocking=False):
+            raise ValueError("有任务正在运行；请等它完成后再更新。")
+        try:
+            info = updater.check_for_update()
+            if not info.update_available or info.kind != "engine":
+                raise ValueError("当前没有可用的轻量引擎更新（可能需要完整安装包）。")
+            staging = updater.download_engine(info, progress=self._update_progress)
+            updater.apply_engine_update(staging)
+            return {"applied": info.latest, "restart_engine": True}
+        except updater.UpdateError as exc:
+            raise ValueError(str(exc)) from exc
+        finally:
+            self._busy.release()
+
+    def cmd_download_installer_update(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Full-installer update: download, verify, launch detached.
+
+        The installer needs the app's files unlocked, so the SHELL must close
+        its window (killing this engine) right after this returns.
+        """
+        from geoscan import updater
+
+        if not self._busy.acquire(blocking=False):
+            raise ValueError("有任务正在运行；请等它完成后再更新。")
+        try:
+            info = updater.check_for_update()
+            if not info.update_available or not info.installer_url:
+                raise ValueError("当前没有可下载的安装包更新。")
+            installer = updater.download_installer(info, progress=self._update_progress)
+            updater._spawn_detached([str(installer)])
+            return {"launched": True, "installer": str(installer), "latest": info.latest}
+        except updater.UpdateError as exc:
+            raise ValueError(str(exc)) from exc
+        finally:
+            self._busy.release()
 
     def cmd_stop(self, args: dict[str, Any]) -> dict[str, Any]:
         self._stop_single.set()
@@ -1023,6 +1078,7 @@ def main() -> int:
         settings_file=str(settings_report.get("settings_file") or ""),
     )
 
+    workers: list[threading.Thread] = []
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -1032,7 +1088,15 @@ def main() -> int:
         except json.JSONDecodeError as exc:
             proto.event("protocol_error", message=f"无法解析请求: {exc}")
             continue
-        threading.Thread(target=host.handle, args=(request,), daemon=True).start()
+        worker = threading.Thread(target=host.handle, args=(request,), daemon=True)
+        worker.start()
+        workers.append(worker)
+        workers = [w for w in workers if w.is_alive()]
+    # stdin EOF: give in-flight request threads a moment to write their replies
+    # before the process exits (a piped one-shot client sends EOF immediately
+    # after its request; without this join the reply would be lost).
+    for worker in workers:
+        worker.join(timeout=15)
     return 0
 
 

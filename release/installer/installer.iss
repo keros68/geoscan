@@ -11,7 +11,11 @@
 
 #define AppName "GeoScan"
 ; Keep this in step with src/geoscan/__init__.py __version__ and the release tag.
-#define AppVersion "0.1.9"
+#define AppVersion "0.2.0"
+; Primary UI since 0.2.0: the Tauri console shell. It spawns the frozen Python
+; engine via "GeoScan.exe --engine". The classic tkinter GUI stays installed as
+; a fallback entry for one release line.
+#define ConsoleExe "GeoScanConsole.exe"
 #define AppExe "GeoScan.exe"
 ; dist folder relative to this .iss (release\installer\ -> repo\dist\...)
 #define DistDir "..\..\dist\GeoScan"
@@ -36,8 +40,12 @@ ArchitecturesAllowed=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 WizardStyle=modern
+; Upgrade installs must overwrite GeoScanConsole.exe / GeoScan.exe; ask the
+; Restart Manager to close a running instance instead of failing on the lock.
+CloseApplications=yes
+RestartApplications=no
 ; SetupIconFile=..\..\packaging\app_icon.ico
-UninstallDisplayIcon={app}\{#AppExe}
+UninstallDisplayIcon={app}\{#ConsoleExe}
 
 [Languages]
 ; ChineseSimplified.isl is an "unofficial" translation Inno does not bundle. For
@@ -64,16 +72,47 @@ Type: filesandordirs; Name: "{app}\gdal"
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{group}\GeoScan"; Filename: "{app}\{#AppExe}"
+Name: "{group}\GeoScan"; Filename: "{app}\{#ConsoleExe}"
+Name: "{group}\GeoScan（经典界面）"; Filename: "{app}\{#AppExe}"
 Name: "{group}\卸载 GeoScan"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\GeoScan"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+Name: "{autodesktop}\GeoScan"; Filename: "{app}\{#ConsoleExe}"; Tasks: desktopicon
 
 [Run]
 ; Headless self-check right after install so a broken bundle fails visibly.
+; --check exercises the frozen Python runtime (cv2 conversion + GUI class),
+; which is exactly what the console's engine relies on.
 Filename: "{app}\{#AppExe}"; Parameters: "--check"; Flags: runhidden waituntilterminated; StatusMsg: "正在自检..."
-Filename: "{app}\{#AppExe}"; Description: "启动 GeoScan"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#ConsoleExe}"; Description: "启动 GeoScan"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; Remove only install-dir leftovers; user config in %LOCALAPPDATA% is preserved
 ; on purpose so a reinstall keeps their tool paths and key.
 Type: filesandordirs; Name: "{app}"
+
+[Code]
+// The console shell renders in WebView2. Win11 / recent Win10 ship it with the
+// OS or Edge; on a machine without it the console window would come up blank,
+// so warn (non-blocking — the classic GUI works regardless) with a download
+// pointer. Evergreen runtime registry locations, per-machine then per-user.
+function WebView2Installed(): Boolean;
+var
+  Version: string;
+begin
+  Result :=
+    RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version) or
+    RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version) or
+    RegQueryStringValue(HKCU, 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version);
+  if Result and ((Version = '') or (Version = '0.0.0.0')) then
+    Result := False;
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  if not WebView2Installed() then
+    MsgBox('未检测到 Microsoft WebView2 运行库。'#13#10 +
+           'GeoScan 主界面需要它才能显示；Windows 11 自带，老系统可到微软官网搜索'#13#10 +
+           '“WebView2 Runtime” 免费安装。'#13#10#13#10 +
+           '仍可继续安装：经典界面（GeoScan（经典界面）快捷方式）不受影响。',
+           mbInformation, MB_OK);
+  Result := True;
+end;

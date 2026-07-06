@@ -32,6 +32,42 @@ fn repo_root() -> PathBuf {
         .unwrap_or(manifest)
 }
 
+/// How to launch the Python engine, in priority order:
+/// 1. `GEOSCAN_PYTHON` — explicit dev override (`python -m geoscan.engine_host`).
+/// 2. A sibling `GeoScan.exe` — the installed layout: the PyInstaller-frozen
+///    app doubles as the engine via `GeoScan.exe --engine`, so the console
+///    works anywhere the installer put it (no repo, no Python needed).
+/// 3. `python -m geoscan.engine_host` from the compile-time repo root — dev
+///    fallback for `tauri dev` without env vars.
+fn engine_command() -> Command {
+    if let Ok(python) = std::env::var("GEOSCAN_PYTHON") {
+        let root = repo_root();
+        let mut cmd = Command::new(python);
+        cmd.args(["-m", "geoscan.engine_host"])
+            .current_dir(&root)
+            .env("PYTHONPATH", root.join("src"))
+            .env("PYTHONIOENCODING", "utf-8");
+        return cmd;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let frozen = dir.join("GeoScan.exe");
+            if frozen.is_file() {
+                let mut cmd = Command::new(frozen);
+                cmd.arg("--engine").current_dir(dir);
+                return cmd;
+            }
+        }
+    }
+    let root = repo_root();
+    let mut cmd = Command::new("python");
+    cmd.args(["-m", "geoscan.engine_host"])
+        .current_dir(&root)
+        .env("PYTHONPATH", root.join("src"))
+        .env("PYTHONIOENCODING", "utf-8");
+    cmd
+}
+
 /// Check-and-spawn while holding the child lock the whole time, so two
 /// concurrent starts (app setup vs. frontend bootstrap vs. manual restart)
 /// can never spawn two engines. Lock order is always child -> stdin.
@@ -49,14 +85,8 @@ fn start_engine_locked(app: &AppHandle, state: &EngineState, kill_existing: bool
     }
     *child_slot = None;
 
-    let python = std::env::var("GEOSCAN_PYTHON").unwrap_or_else(|_| "python".into());
-    let root = repo_root();
-    let mut cmd = Command::new(&python);
-    cmd.args(["-m", "geoscan.engine_host"])
-        .current_dir(&root)
-        .env("PYTHONPATH", root.join("src"))
-        .env("PYTHONIOENCODING", "utf-8")
-        .stdin(Stdio::piped())
+    let mut cmd = engine_command();
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
@@ -64,9 +94,10 @@ fn start_engine_locked(app: &AppHandle, state: &EngineState, kill_existing: bool
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
+    let program = cmd.get_program().to_string_lossy().into_owned();
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("无法启动 Python 引擎（{python}）: {e}"))?;
+        .map_err(|e| format!("无法启动引擎（{program}）: {e}"))?;
 
     let stdout = child.stdout.take().ok_or("engine stdout unavailable")?;
     let stderr = child.stderr.take().ok_or("engine stderr unavailable")?;

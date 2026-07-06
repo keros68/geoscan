@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog, ask } from "@tauri-apps/plugin-dialog";
 import { engineCall, initEngine, onEngine, restartEngine } from "./engine";
 import {
@@ -267,6 +268,15 @@ export default function App() {
         });
         void refreshHistory(formRef.current.output_parent);
       }),
+      onEngine("update_progress", (data) => {
+        const done = Number(data.done ?? 0);
+        const total = Number(data.total ?? 0);
+        setStatusLabel(
+          total > 0
+            ? `正在下载更新… ${Math.floor((done * 100) / total)}%`
+            : `正在下载更新… ${(done / 1048576).toFixed(1)} MB`,
+        );
+      }),
       onEngine("engine_stderr", (data) => {
         setStderrLines((prev) => [...prev.slice(-500), String(data.message ?? "")]);
       }),
@@ -521,29 +531,6 @@ export default function App() {
     [pushLog, pushToast],
   );
 
-  const checkUpdate = useCallback(async () => {
-    pushLog("info", "正在检查更新…");
-    try {
-      const info = await engineCall<any>("check_update");
-      if (info.update_available) {
-        pushToast(
-          "info",
-          `发现新版本 v${info.latest}`,
-          `当前 v${info.current}。请到 GitHub Releases 下载，或使用旧版 GUI 的一键更新。`,
-        );
-      } else {
-        pushToast("ok", "已是最新版本", `当前 v${info.current}`);
-      }
-    } catch (error) {
-      pushToast("warning", "检查更新失败", String(error instanceof Error ? error.message : error));
-    }
-  }, [pushLog, pushToast]);
-
-  const updateForm = useCallback((patch: Partial<RunForm>) => {
-    setForm((prev) => ({ ...prev, ...patch }));
-    if (patch.conversion_mode) void refreshPreflight(patch.conversion_mode);
-  }, [refreshPreflight]);
-
   const restart = useCallback(() => {
     setEngineState("starting");
     bootstrappedRef.current = false;
@@ -566,6 +553,49 @@ export default function App() {
       })
       .catch((error) => pushToast("error", "重启引擎失败", String(error)));
   }, [bootstrapEngine, pushLog, pushToast]);
+
+  const checkUpdate = useCallback(async () => {
+    pushLog("info", "正在检查更新…");
+    try {
+      const info = await engineCall<any>("check_update");
+      if (!info.update_available) {
+        pushToast("ok", "已是最新版本", `当前 v${info.current}`);
+        return;
+      }
+      const size = Number(info.download_size ?? 0);
+      const sizeText = size > 0 ? `约 ${(size / 1048576).toFixed(1)} MB` : "大小未知";
+      if (info.kind === "engine") {
+        const go = await ask(
+          `发现新版本 v${info.latest}（当前 v${info.current}）。\n轻量引擎更新 ${sizeText}：下载校验后就地替换，然后自动重启引擎——界面不中断，设置不丢。\n\n现在更新？`,
+          { title: "发现新版本", kind: "info", okLabel: "现在更新", cancelLabel: "以后再说" },
+        );
+        if (!go) return;
+        setStatusLabel("正在下载更新…");
+        const result = await engineCall<{ applied: string }>("apply_engine_update");
+        pushLog("info", `引擎已更新至 v${result.applied}，正在重启引擎…`);
+        restart();
+        pushToast("ok", "更新完成", `引擎已更新至 v${result.applied}（界面无需重启）。`);
+      } else {
+        const go = await ask(
+          `发现新版本 v${info.latest}（当前 v${info.current}）。\n本次需要完整安装包 ${sizeText}：下载校验后将启动安装程序并关闭本窗口，设置不丢。\n\n现在下载安装？`,
+          { title: "发现新版本", kind: "info", okLabel: "下载并安装", cancelLabel: "以后再说" },
+        );
+        if (!go) return;
+        setStatusLabel("正在下载安装包…");
+        await engineCall("download_installer_update");
+        pushToast("ok", "安装程序已启动", "本窗口即将关闭，按安装向导完成升级。");
+        window.setTimeout(() => void getCurrentWindow().close(), 2500);
+      }
+    } catch (error) {
+      setStatusLabel("就绪");
+      pushToast("warning", "检查更新失败", String(error instanceof Error ? error.message : error));
+    }
+  }, [pushLog, pushToast, restart]);
+
+  const updateForm = useCallback((patch: Partial<RunForm>) => {
+    setForm((prev) => ({ ...prev, ...patch }));
+    if (patch.conversion_mode) void refreshPreflight(patch.conversion_mode);
+  }, [refreshPreflight]);
 
   const copyDiagnostics = useCallback(() => {
     const lines: string[] = [];

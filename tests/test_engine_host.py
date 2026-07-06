@@ -394,6 +394,81 @@ def test_engine_host_run_single_rejects_invalid_form():
     assert "输入图片" in reply["error"]
 
 
+def test_apply_engine_update_flow(monkeypatch, tmp_path):
+    import types
+
+    from geoscan import updater
+
+    info = updater.UpdateInfo(current="0.1.0", latest="0.2.0", update_available=True, kind="engine")
+    calls = []
+    fake = types.SimpleNamespace(
+        check_for_update=lambda: info,
+        download_engine=lambda i, progress=None: (progress and progress(50, 100)) or tmp_path,
+        apply_engine_update=lambda staging: calls.append(("apply", str(staging))),
+        UpdateError=updater.UpdateError,
+    )
+    monkeypatch.setitem(sys.modules, "geoscan.updater", fake)
+    import geoscan as _g
+
+    monkeypatch.setattr(_g, "updater", fake, raising=False)
+
+    proto, sink = _make_proto()
+    host = EngineHost(proto)
+    host.handle({"id": 1, "cmd": "apply_engine_update"})
+    payloads = sink.payloads()
+    reply = next(p for p in payloads if p.get("id") == 1)
+    assert reply["ok"] is True
+    assert reply["data"]["applied"] == "0.2.0"
+    assert calls == [("apply", str(tmp_path))]
+    assert any(p.get("event") == "update_progress" for p in payloads)
+    # The busy lock must be free again afterwards.
+    assert host._busy.acquire(blocking=False)
+    host._busy.release()
+
+
+def test_apply_engine_update_rejects_when_not_engine_kind(monkeypatch):
+    import types
+
+    from geoscan import updater
+
+    info = updater.UpdateInfo(current="0.1.0", latest="0.2.0", update_available=True, kind="installer")
+    fake = types.SimpleNamespace(check_for_update=lambda: info, UpdateError=updater.UpdateError)
+    monkeypatch.setitem(sys.modules, "geoscan.updater", fake)
+    import geoscan as _g
+
+    monkeypatch.setattr(_g, "updater", fake, raising=False)
+
+    proto, sink = _make_proto()
+    host = EngineHost(proto)
+    host.handle({"id": 2, "cmd": "apply_engine_update"})
+    reply = sink.payloads()[0]
+    assert reply["ok"] is False
+    assert "完整安装包" in reply["error"]
+    assert host._busy.acquire(blocking=False)
+    host._busy.release()
+
+
+def test_engine_host_one_shot_pipe_gets_reply_before_exit():
+    """A piped client that sends one request then EOF must still get the reply
+    (main() joins in-flight request threads after stdin closes)."""
+    repo_root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(repo_root / "src")
+    env["PYTHONIOENCODING"] = "utf-8"
+    result = subprocess.run(
+        [sys.executable, "-m", "geoscan.engine_host"],
+        input=json.dumps({"id": 9, "cmd": "ping"}) + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        cwd=str(repo_root),
+        timeout=60,
+    )
+    replies = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    assert any(payload.get("id") == 9 and payload.get("ok") for payload in replies)
+
+
 def test_engine_host_subprocess_ping_roundtrip():
     repo_root = Path(__file__).resolve().parents[1]
     env = dict(os.environ)

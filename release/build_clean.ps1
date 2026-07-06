@@ -110,6 +110,29 @@ if (Test-Path (Join-Path $gdalSrc "ogr2ogr.exe")) {
     Write-Warning "packaging\gdal_bundle\ogr2ogr.exe not found - packaged app will need QGIS or MAPGIS_OGR2OGR."
 }
 
+# 5.5 Tauri console shell (primary UI since 0.2.0) ---------------------------
+# Needs Node + Rust(MSVC) on the build machine. `tauri build` runs the
+# frontend build (beforeBuildCommand) itself; bundling is off in tauri.conf,
+# we only want the release exe, which then ships inside the Inno installer.
+Section "Building Tauri console (GeoScanConsole.exe)"
+$uiDir = Join-Path $repoRoot "ui"
+if (-not (Test-Path (Join-Path $uiDir "node_modules"))) {
+    Push-Location $uiDir
+    try { npm install; if ($LASTEXITCODE -ne 0) { throw "npm install failed" } }
+    finally { Pop-Location }
+}
+Push-Location $uiDir
+try {
+    npm run tauri build -- --no-bundle
+    if ($LASTEXITCODE -ne 0) { throw "tauri build failed with exit code $LASTEXITCODE" }
+} finally {
+    Pop-Location
+}
+$consoleExe = Join-Path $uiDir "src-tauri\target\release\geoscan-console.exe"
+if (-not (Test-Path $consoleExe)) { throw "console exe not found: $consoleExe" }
+Copy-Item $consoleExe (Join-Path $distDir "GeoScanConsole.exe") -Force
+Write-Host "GeoScanConsole.exe copied into dist" -ForegroundColor Green
+
 # 6. Optional GDAL DLL trim -------------------------------------------------
 if ($TrimGdal) {
     Section "Trimming unused GDAL DLLs"
@@ -134,6 +157,29 @@ Section "Smoke test (--check)"
 $smoke = Start-Process -FilePath (Join-Path $distDir "GeoScan.exe") -ArgumentList "--check" -Wait -PassThru
 if ($smoke.ExitCode -ne 0) { throw "--check smoke test failed (exit $($smoke.ExitCode))" }
 Write-Host "--check passed" -ForegroundColor Green
+
+# 8.5 Engine-host smoke: the console talks to `GeoScan.exe --engine` over
+# stdio JSONL; a one-shot ping proves the frozen engine path end to end.
+# Start-Process file redirection gives the WINDOWED exe real std handles —
+# a PowerShell pipeline does not, and the invalid handle only explodes on
+# flush ([Errno 22]) inside the engine.
+Section "Smoke test (--engine ping)"
+$pingReq = Join-Path $env:TEMP "geoscan_engine_ping_req.jsonl"
+$pingRes = Join-Path $env:TEMP "geoscan_engine_ping_res.jsonl"
+'{"id":1,"cmd":"ping"}' | Set-Content $pingReq -Encoding ascii
+$pingProc = Start-Process -FilePath (Join-Path $distDir "GeoScan.exe") -ArgumentList "--engine" `
+    -RedirectStandardInput $pingReq -RedirectStandardOutput $pingRes -Wait -PassThru
+$pingOut = Get-Content $pingRes -ErrorAction SilentlyContinue
+$pingOk = $pingOut | Where-Object { $_ -match '"id":\s*1' -and $_ -match '"ok":\s*true' }
+if (-not $pingOk) { throw "--engine ping smoke failed (exit $($pingProc.ExitCode)); output: $($pingOut -join ' | ')" }
+Write-Host "--engine ping passed" -ForegroundColor Green
+
+# 8.6 Private-tier guard: the dist becomes a PUBLIC release asset.
+Section "Private-module leak check"
+$privatePattern = 'native_direct|wl_from_scratch|wt_w60|wt_from_seed|mapgis_binary|mapgis_wl|mapgis_wt|mapgis_wp|native_format_lab|wt_native_diag|mapgis67_diagnostics|seed_templates'
+$leaks = Get-ChildItem $distDir -Recurse -File | Where-Object { $_.Name -match $privatePattern }
+if ($leaks) { throw "PRIVATE MODULE LEAKED INTO DIST: $($leaks.FullName -join '; ')" }
+Write-Host "no private modules in dist" -ForegroundColor Green
 Write-Host "`nBuild finished: $distDir" -ForegroundColor Green
 if ($TrimGdal) {
     Write-Warning "GDAL was trimmed. RUN A REAL DXF EXPORT (line + text) before shipping to confirm no driver DLL is missing."

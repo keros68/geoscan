@@ -9,13 +9,36 @@ Releases → 客户端自动升级」的外层流程。
 | 文件 | 作用 | 状态 |
 |---|---|---|
 | `requirements-runtime.txt` | 仅列真实运行时依赖（干净 venv 用） | ✅ 可用 |
-| `build_clean.ps1` | 干净 venv 构建 + 瘦身 + 冒烟 | ✅ 可用 |
+| `build_clean.ps1` | 干净 venv 构建 + Tauri 控制台 + 瘦身 + 冒烟 | ✅ 可用 |
 | `trim_gdal.ps1` | GDAL 裁剪（默认 dry-run，`-Apply` 才删） | ✅ 可用 |
-| `installer/installer.iss` | Inno Setup 出 `MapGISVectorizeSetup.exe` | ✅ 可用 |
+| `installer/installer.iss` | Inno Setup 出 `GeoScanSetup.exe` | ✅ 可用 |
 
 客户端自动升级的**程序侧**逻辑不在本目录，而在 `src/geoscan/updater.py`
-（对 GitHub Releases 的 `releases/latest` 查询 / 下载 / 校验 / 换装），并由
-`production_gui.py` 的「检查更新」按钮触发。测试见 `tests/test_updater.py`。
+（对 GitHub Releases 的 `releases/latest` 查询 / 下载 / 校验 / 换装），由
+新控制台（engine_host 的 `check_update`/`apply_engine_update` 命令）和经典
+GUI 的「检查更新」按钮共同复用。测试见 `tests/test_updater.py`。
+
+## 0.2.0 起的双界面布局
+
+安装目录内并存两个界面，共享同一个冻结 Python 运行时与两层更新：
+
+```
+GeoScanConsole.exe   主界面（Tauri/React 控制台；开始菜单/桌面快捷方式指向它）
+GeoScan.exe          经典 tkinter 界面（保留一个版本线作后备入口）
+GeoScan.exe --engine 控制台后台引擎（JSONL over stdio；控制台自动拉起，用户不用管）
+_internal\           冻结运行时 + engine\ 松散 geoscan 代码（引擎 zip 更新的目标）
+gdal\                自带 ogr2ogr
+```
+
+控制台的引擎解析顺序在 `ui/src-tauri/src/main.rs`：`GEOSCAN_PYTHON` 环境变量
+（开发覆盖）→ 同目录 `GeoScan.exe --engine`（安装布局）→ 仓库内 `python -m
+geoscan.engine_host`（`tauri dev` 回退）。**构建机需要 Node + Rust(MSVC)**，
+`build_clean.ps1` 会自动 `npm install` 并 `tauri build --no-bundle`。
+
+轻量引擎更新对控制台同样生效：`apply_engine_update` 换掉 `_internal/engine/`
+后控制台只重启引擎进程，窗口不动；整包更新则由控制台下载安装器、自动关窗交给
+Inno（`CloseApplications=yes` 兜底）。终端用户机器需要 WebView2 运行库
+（Win11 自带；安装器检测缺失时提示，不阻塞——经典界面不依赖它）。
 
 ## 构建安装包（Phase 0）
 
@@ -77,11 +100,15 @@ python release\build_engine_zip.py             # -> dist\engine-<版本>-rt<N>.z
 ISCC release\installer\installer.iss           # -> dist\installer\GeoScanSetup.exe（整包，含 gdal）
 
 # 3. 发布，同时上传两个资产
-gh release create v0.2.0 `
+gh release create v<版本> `
   dist\installer\GeoScanSetup.exe `
-  dist\engine-0.2.0-rt1.zip `
-  --title "GeoScan v0.2.0" --notes "本次更新内容：..."
+  dist\engine-<版本>-rt<N>.zip `
+  --title "GeoScan v<版本>" --notes "本次更新内容：..."
 ```
+
+> 0.2.0 特例：runtime line 2→3（安装布局加入了 GeoScanConsole.exe），老客户端
+> 不会匹配 rt3 引擎包，自动回退整包安装器——这是有意的，engine zip 无法送达
+> 控制台 exe。
 
 发布后：已在两层版（≥0.1.3）上的用户点「检查更新」→ 只下 ~180KB 引擎包 → 自动重启生效；
 运行时号变了或还在旧单层版的用户 → 回退整包 `GeoScanSetup.exe`。
