@@ -1,0 +1,428 @@
+import io
+import json
+import os
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+import pytest
+
+from geoscan.engine_host import (
+    EngineHost,
+    Protocol,
+    STAGE_KEYS,
+    StageTracker,
+    _StdoutToLog,
+    form_state_from_args,
+    load_candidates,
+    run_summary,
+    stage_states_from_report,
+    validate_form_state,
+)
+
+
+class _Sink:
+    def __init__(self):
+        self.lines = []
+
+    def write(self, text):
+        self.lines.append(text)
+
+    def flush(self):
+        pass
+
+    def payloads(self):
+        return [json.loads(line) for line in self.lines if line.strip()]
+
+
+def _make_proto():
+    sink = _Sink()
+    return Protocol(sink), sink
+
+
+def test_protocol_reply_fail_event_shapes():
+    proto, sink = _make_proto()
+    proto.reply(3, {"a": 1})
+    proto.fail(4, "bad")
+    proto.event("log", level="info", message="你好")
+    replies = sink.payloads()
+    assert replies[0] == {"id": 3, "ok": True, "data": {"a": 1}}
+    assert replies[1] == {"id": 4, "ok": False, "error": "bad"}
+    assert replies[2] == {"event": "log", "data": {"level": "info", "message": "你好"}}
+    # Chinese must be emitted as UTF-8 text, not \u escapes (readability in logs).
+    assert "你好" in sink.lines[2]
+
+
+def test_stdout_to_log_buffers_partial_lines():
+    proto, sink = _make_proto()
+    capture = _StdoutToLog(proto)
+    capture.write("part1 ")
+    capture.write("part2\nnext")
+    events = sink.payloads()
+    assert len(events) == 1
+    assert events[0]["data"]["message"] == "part1 part2"
+    capture.write("\n")
+    assert sink.payloads()[1]["data"]["message"] == "next"
+
+
+def test_form_state_from_args_defaults_and_types(tmp_path):
+    state = form_state_from_args(
+        {
+            "source_raster": str(tmp_path / "t01_0004.tif"),
+            "map_id": "T01_0004",
+            "project_root": str(tmp_path),
+            "output_parent": str(tmp_path),
+            "line_bridge_gap_px": "80",
+            "include_areas": True,
+        }
+    )
+    assert state.map_id == "T01_0004"
+    assert state.line_bridge_gap_px == 80.0
+    assert state.include_areas is True
+    assert state.conversion_mode == "cli"
+    assert state.line_engine == "trace"
+    assert state.line_connect == "standard"
+    assert state.export_dxf is True
+
+
+def test_validate_form_state_reports_first_error(tmp_path):
+    raster = tmp_path / "t01_0004.tif"
+    raster.write_bytes(b"fake")
+    base = {
+        "source_raster": str(raster),
+        "map_id": "T01_0004",
+        "project_root": str(tmp_path),
+        "output_parent": str(tmp_path),
+        "conversion_mode": "none",
+    }
+    assert validate_form_state(form_state_from_args(base)) is None
+
+    missing = dict(base, source_raster=str(tmp_path / "nope.tif"))
+    assert "输入图片" in validate_form_state(form_state_from_args(missing))
+
+    bad_combo = dict(base, line_export_source="repaired", line_repair="off")
+    assert "repaired" in validate_form_state(form_state_from_args(bad_combo))
+
+    bad_gap = dict(base, line_bridge_gap_px=-5)
+    assert "不能为负数" in validate_form_state(form_state_from_args(bad_gap))
+
+
+def test_stage_states_from_successful_report(tmp_path):
+    load_folder = tmp_path / "MAPGIS_LOAD_READY"
+    load_folder.mkdir()
+    report = {
+        "line_candidate_generation": {"ok": True, "feature_count": 12},
+        "text_candidate_generation": {"ok": True, "feature_count": 3},
+        "line": {"dxf_export": {"path": "line.dxf"}},
+        "text": {"dxf_export": {"path": "text.dxf"}},
+        "conversion": {"status": "converted", "ok": True, "mode": "cli"},
+        "mapgis_load_ready": {"load_folder": str(load_folder)},
+    }
+    states = stage_states_from_report(report)
+    assert states["00_INPUT_FREEZE"] == "completed"
+    assert states["04_LINE_WORKFLOW"] == "completed"
+    assert states["05_TEXT_WORKFLOW"] == "completed"
+    assert states["DXF_EXPORT"] == "completed"
+    assert states["08_SECTION_W60"] == "completed"
+    assert states["MAPGIS_LOAD_READY"] == "completed"
+
+
+def test_stage_states_prepare_is_skipped_not_failed():
+    report = {
+        "line_candidate_generation": {"ok": True},
+        "text_candidate_generation": {"ok": True},
+        "line": {"dxf_export": {"path": "line.dxf"}},
+        "text": {"dxf_export": {"path": "text.dxf"}},
+        "conversion": {"status": "prepared", "mode": "prepare"},
+    }
+    states = stage_states_from_report(report)
+    assert states["08_SECTION_W60"] == "skipped"
+    assert states["DXF_EXPORT"] == "completed"
+
+
+def test_stage_states_missing_text_dxf_is_a_failure():
+    # Repo rule: line AND text DXF must always be produced — a missing DXF is
+    # a bug, so half an export must never read as "completed".
+    report = {
+        "line_candidate_generation": {"ok": True},
+        "text_candidate_generation": {"ok": True},
+        "line": {"dxf_export": {"path": "line.dxf"}},
+        "text": {},
+        "conversion": {"status": "prepared", "mode": "prepare"},
+    }
+    assert stage_states_from_report(report)["DXF_EXPORT"] == "failed"
+
+
+def test_stage_states_no_dxf_at_all_is_skipped():
+    report = {
+        "line_candidate_generation": {"ok": True},
+        "text_candidate_generation": {"ok": True},
+        "line": {},
+        "text": {},
+    }
+    assert stage_states_from_report(report)["DXF_EXPORT"] == "skipped"
+
+
+def test_stage_states_failed_conversion_blocks_load_ready(tmp_path):
+    report = {
+        "line_candidate_generation": {"ok": True},
+        "text_candidate_generation": {"ok": True},
+        "line": {"dxf_export": {"path": "line.dxf"}},
+        "conversion": {"status": "failed", "ok": False, "mode": "cli"},
+        "mapgis_load_ready": {"load_folder": str(tmp_path / "missing")},
+    }
+    states = stage_states_from_report(report)
+    assert states["08_SECTION_W60"] == "failed"
+    assert states["MAPGIS_LOAD_READY"] == "blocked"
+
+
+def test_stage_tracker_scan_marks_dirs_and_finish_freezes(tmp_path):
+    proto, sink = _make_proto()
+    tracker = StageTracker(tmp_path, proto)
+    (tmp_path / "00_INPUT_FREEZE").mkdir()
+    tracker.scan()
+    (tmp_path / "04_LINE_WORKFLOW").mkdir()
+    tracker.scan()
+    states = {
+        event["data"]["stage"]: event["data"]["state"]
+        for event in sink.payloads()
+        if event.get("event") == "stage"
+    }
+    assert states["00_INPUT_FREEZE"] == "completed"
+    assert states["04_LINE_WORKFLOW"] == "running"
+
+    tracker.finish(None, cancelled=True)
+    states = {
+        event["data"]["stage"]: event["data"]["state"]
+        for event in sink.payloads()
+        if event.get("event") == "stage"
+    }
+    assert states["04_LINE_WORKFLOW"] == "cancelled"
+    assert states["MAPGIS_LOAD_READY"] == "cancelled"
+
+    # A scan racing in after finish() must never resurrect "running":
+    # the done-check inside the lock freezes the rail at its final states.
+    events_before = len(sink.lines)
+    tracker.scan()
+    assert len(sink.lines) == events_before
+
+
+def test_load_candidates_flips_y_and_reads_text_bboxes(tmp_path):
+    lines_path = tmp_path / "lines.geojson"
+    texts_path = tmp_path / "texts.geojson"
+    lines_path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "LineString", "coordinates": [[10, 90], [20, 80]]},
+                        "properties": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    texts_path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": None,
+                        "properties": {
+                            "bbox_left_px": 5,
+                            "bbox_top_px": 6,
+                            "bbox_right_px": 30,
+                            "bbox_bottom_px": 18,
+                            "text": "Qn2",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "PROGRAM_RUN_REPORT.json").write_text(
+        json.dumps(
+            {
+                "line_candidate_generation": {"output_geojson": str(lines_path)},
+                "text_candidate_generation": {"output_geojson": str(texts_path)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = load_candidates(tmp_path, image_height=100)
+    # Map-space y=90 with height 100 -> image row 10 (y-down for the canvas).
+    assert result["lines"] == [[[10.0, 10.0], [20.0, 20.0]]]
+    # The report's own raster size must win over the caller-provided height.
+    report_path = tmp_path / "PROGRAM_RUN_REPORT.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["raster_alignment"] = {"source_size_px": [200, 190]}
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    result = load_candidates(tmp_path, image_height=100)
+    assert result["lines"] == [[[10.0, 100.0], [20.0, 110.0]]]
+    result = load_candidates(tmp_path, image_height=100)
+    assert result["texts"][0]["text"] == "Qn2"
+    assert result["texts"][0]["top"] == 6.0
+    assert result["dropped_lines"] == 0
+
+
+def test_run_summary_without_report(tmp_path):
+    assert run_summary(tmp_path) == {"has_report": False}
+
+
+def test_list_history_finds_run_folders(tmp_path):
+    from geoscan.engine_host import list_history
+
+    run_dir = tmp_path / "T01_0004_P"
+    run_dir.mkdir()
+    (run_dir / "PROGRAM_RUN_REPORT.json").write_text(
+        json.dumps({"map_id": "T01_0004", "line_candidate_generation": {"feature_count": 7}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "not_a_run").mkdir()
+    rows = list_history(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["name"] == "T01_0004_P"
+    assert rows[0]["line_candidates"] == 7
+
+
+def test_count_checked_yes_reads_real_property(tmp_path):
+    from geoscan.engine_host import _count_checked_yes
+
+    lines_path = tmp_path / "lines.geojson"
+    lines_path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature", "geometry": None, "properties": {"checked": "no"}},
+                    {"type": "Feature", "geometry": None, "properties": {"checked": "yes"}},
+                    {"type": "Feature", "geometry": None, "properties": {}},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = {"line_candidate_generation": {"output_geojson": str(lines_path)}}
+    assert _count_checked_yes(report) == 1
+    assert _count_checked_yes({}) == 0
+
+
+def test_save_settings_without_save_key_never_touches_stored_key(monkeypatch, tmp_path):
+    import geoscan.engine_host as engine_host
+
+    key_calls = []
+    monkeypatch.setattr(engine_host, "save_settings", lambda settings: tmp_path / "settings.json")
+    monkeypatch.setattr(engine_host, "apply_settings_to_env", lambda settings, override: {})
+    monkeypatch.setattr(engine_host, "save_encrypted_api_key", lambda value: key_calls.append(value))
+
+    proto, sink = _make_proto()
+    host = EngineHost(proto)
+    # Tool-paths-only save (the console settings dialog): key must be untouched.
+    host.handle({"id": 1, "cmd": "save_settings", "args": {"settings": {}}})
+    assert sink.payloads()[0]["ok"] is True
+    assert key_calls == []
+    # Explicit save_key=True stores the key; explicit save_key=False clears it.
+    host.handle({"id": 2, "cmd": "save_settings", "args": {"settings": {}, "save_key": True, "ai_api_key": "sk-x"}})
+    host.handle({"id": 3, "cmd": "save_settings", "args": {"settings": {}, "save_key": False}})
+    assert key_calls == ["sk-x", ""]
+
+
+def test_run_single_releases_busy_lock_when_setup_fails(monkeypatch, tmp_path):
+    import geoscan.engine_host as engine_host
+
+    raster = tmp_path / "t01_0004.tif"
+    raster.write_bytes(b"fake")
+    form = {
+        "source_raster": str(raster),
+        "map_id": "T01_0004",
+        "project_root": str(tmp_path),
+        "output_parent": str(tmp_path),
+        "conversion_mode": "none",
+    }
+
+    def boom(state):
+        raise RuntimeError("config build exploded")
+
+    monkeypatch.setattr(engine_host, "build_program_config_from_gui", boom)
+    proto, sink = _make_proto()
+    host = EngineHost(proto)
+    host.handle({"id": 1, "cmd": "run_single", "args": {"form": form}})
+    assert sink.payloads()[0]["ok"] is False
+    # The lock must be free again or every later run is rejected forever.
+    assert host._busy.acquire(blocking=False)
+    host._busy.release()
+
+
+def test_get_settings_never_returns_plaintext_key(monkeypatch):
+    import geoscan.engine_host as engine_host
+
+    monkeypatch.setattr(engine_host, "read_machine_settings", lambda: {})
+    monkeypatch.setattr(engine_host, "load_encrypted_api_key", lambda: "sk-super-secret")
+    proto, sink = _make_proto()
+    host = EngineHost(proto)
+    host.handle({"id": 1, "cmd": "get_settings"})
+    reply = sink.payloads()[0]
+    assert reply["ok"] is True
+    assert "sk-super-secret" not in json.dumps(reply)
+    assert reply["data"]["has_saved_key"] is True
+
+
+def test_engine_host_handle_ping_and_unknown():
+    proto, sink = _make_proto()
+    host = EngineHost(proto)
+    host.handle({"id": 1, "cmd": "ping"})
+    host.handle({"id": 2, "cmd": "no_such_cmd"})
+    payloads = sink.payloads()
+    assert payloads[0]["ok"] is True
+    assert payloads[0]["data"]["app"] == "geoscan"
+    assert payloads[1]["ok"] is False
+
+
+def test_engine_host_run_single_rejects_invalid_form():
+    proto, sink = _make_proto()
+    host = EngineHost(proto)
+    host.handle({"id": 5, "cmd": "run_single", "args": {"form": {"source_raster": "Z:/nope.tif"}}})
+    reply = sink.payloads()[0]
+    assert reply["ok"] is False
+    assert "输入图片" in reply["error"]
+
+
+def test_engine_host_subprocess_ping_roundtrip():
+    repo_root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(repo_root / "src")
+    env["PYTHONIOENCODING"] = "utf-8"
+    process = subprocess.Popen(
+        [sys.executable, "-m", "geoscan.engine_host"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        cwd=str(repo_root),
+    )
+    try:
+        process.stdin.write(json.dumps({"id": 1, "cmd": "ping"}) + "\n")
+        process.stdin.flush()
+        reply = None
+        for _ in range(50):
+            line = process.stdout.readline()
+            if not line:
+                break
+            payload = json.loads(line)
+            if payload.get("id") == 1:
+                reply = payload
+                break
+        assert reply is not None, "engine host never answered ping"
+        assert reply["ok"] is True
+        assert reply["data"]["app"] == "geoscan"
+    finally:
+        process.kill()

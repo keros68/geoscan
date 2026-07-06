@@ -524,7 +524,15 @@ def _run_w60_shape_to_wp_automation(
     shp_path: Path,
     target_wp: Path,
 ) -> dict[str, Any]:
-    process = subprocess.Popen([str(w60_conv_exe)], cwd=str(w60_conv_exe.parent))
+    # DEVNULL: GUI apps never use stdio; inherited handles would otherwise
+    # point at the caller's stdout (the engine host's JSONL protocol pipe).
+    process = subprocess.Popen(
+        [str(w60_conv_exe)],
+        cwd=str(w60_conv_exe.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     startup_warning = _dismiss_w60_startup_warning(process.pid, timeout_seconds=8)
     hwnd = _wait_for_w60_main_window(process.pid, timeout_seconds=30)
     time.sleep(1)
@@ -935,7 +943,13 @@ def _run_section_win32_batch_convert(
     import win32con
     import win32gui
 
-    process = subprocess.Popen(_section_launch_args(section_exe, bootstrap_file), cwd=str(section_exe.parent))
+    process = subprocess.Popen(
+        _section_launch_args(section_exe, bootstrap_file),
+        cwd=str(section_exe.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     hwnd = _wait_for_process_window(process.pid, timeout_seconds=30)
     time.sleep(SECTION_STARTUP_SETTLE_SECONDS)
     _activate_section_window(hwnd)
@@ -1013,7 +1027,13 @@ def _run_w60_win32_batch_convert(
     w60_conv_exe: Path,
     selected_dxf: Path,
 ) -> dict[str, Any]:
-    process = subprocess.Popen([str(w60_conv_exe)], cwd=str(w60_conv_exe.parent))
+    process = subprocess.Popen(
+        [str(w60_conv_exe)],
+        cwd=str(w60_conv_exe.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     startup_warning = _dismiss_w60_startup_warning(process.pid, timeout_seconds=8)
     hwnd = _wait_for_w60_main_window(process.pid, timeout_seconds=30)
     time.sleep(1)
