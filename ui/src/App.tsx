@@ -857,7 +857,7 @@ export default function App() {
         "",
         "作者：keros68",
         "项目仓库：https://github.com/keros68/geoscan",
-        "邮箱：keros68@gmal.com",
+        "邮箱：keros68@gmail.com",
       ].join("\n"),
     );
   }, []);
