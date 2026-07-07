@@ -1,6 +1,6 @@
 [package]
 name = "geoscan-console"
-version = "0.2.5"
+version = "0.2.6"
 description = "GeoScan Control Console (Tauri shell over the Python engine)"
 edition = "2021"
 

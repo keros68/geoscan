@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import ssl
 
 import pytest
 
@@ -148,7 +149,39 @@ class _FakeResp:
 
 
 def _patch_urlopen(monkeypatch, data: bytes):
-    monkeypatch.setattr(updater.urllib.request, "urlopen", lambda req, timeout=0: _FakeResp(data))
+    monkeypatch.setattr(updater.urllib.request, "urlopen", lambda req, timeout=0, **kwargs: _FakeResp(data))
+
+
+def test_http_get_uses_ssl_context(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=0, **kwargs):
+        captured["context"] = kwargs.get("context")
+        return _FakeResp(b"{}")
+
+    monkeypatch.setattr(updater.urllib.request, "urlopen", fake_urlopen)
+
+    assert updater._http_get("https://example/latest.json", timeout=1) == b"{}"
+    assert isinstance(captured["context"], ssl.SSLContext)
+
+
+def test_download_uses_ssl_context(monkeypatch, tmp_path):
+    data = b"MZ"
+    captured = {}
+
+    def fake_urlopen(req, timeout=0, **kwargs):
+        captured["context"] = kwargs.get("context")
+        return _FakeResp(data)
+
+    monkeypatch.setattr(updater.urllib.request, "urlopen", fake_urlopen)
+    info = updater.UpdateInfo(
+        current="0.1.0", latest="0.2.0", update_available=True,
+        installer_url="https://example/setup.exe", installer_size=len(data),
+    )
+
+    updater.download_installer(info, dest_dir=tmp_path)
+
+    assert isinstance(captured["context"], ssl.SSLContext)
 
 
 def test_download_writes_file_and_reports_progress(monkeypatch, tmp_path):

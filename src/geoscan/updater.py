@@ -31,6 +31,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -168,13 +169,27 @@ def _engine_writable() -> bool:
 # ---------------------------------------------------------------------------
 # Network
 # ---------------------------------------------------------------------------
+def _ssl_context() -> ssl.SSLContext:
+    """TLS context for frozen builds: Windows roots plus bundled certifi roots."""
+    context = ssl.create_default_context()
+    try:
+        import certifi
+    except Exception:
+        return context
+    try:
+        context.load_verify_locations(cafile=certifi.where())
+    except (OSError, ssl.SSLError):
+        pass
+    return context
+
+
 def _http_get(url: str, timeout: float, accept: str | None = None) -> bytes:
     req = urllib.request.Request(url)
     req.add_header("User-Agent", _USER_AGENT)
     if accept:
         req.add_header("Accept", accept)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - fixed HTTPS hosts
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:  # noqa: S310
             return resp.read()
     except urllib.error.HTTPError as exc:  # 404 (no releases yet), 403 (rate limit), ...
         raise UpdateError(_explain_http_error(exc)) from exc
@@ -222,7 +237,7 @@ def _download_to(
     req.add_header("User-Agent", _USER_AGENT)
     hasher = hashlib.sha256()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:  # noqa: S310
             total = int(resp.headers.get("Content-Length") or size_hint or 0)
             done = 0
             with open(target, "wb") as fh:
