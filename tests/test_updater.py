@@ -56,6 +56,32 @@ def _patch_get(monkeypatch, payload: bytes):
     monkeypatch.setattr(updater, "_http_get", lambda url, timeout, accept=None: payload)
 
 
+def _mirror_manifest(tag: str, *, rt: str = "1") -> bytes:
+    version = tag.lstrip("v")
+    return json.dumps(
+        {
+            "version": version,
+            "tag": tag,
+            "notes": "mirror notes",
+            "github": f"https://github.com/keros68/geoscan/releases/tag/{tag}",
+            "assets": [
+                {
+                    "name": updater.INSTALLER_ASSET_NAME,
+                    "url": f"https://aidraw.cv/geoscan-updates/releases/{tag}/{updater.INSTALLER_ASSET_NAME}",
+                    "size": 100_000,
+                    "sha256": "aa" * 32,
+                },
+                {
+                    "name": f"engine-{version}-rt{rt}.zip",
+                    "url": f"https://aidraw.cv/geoscan-updates/releases/{tag}/engine-{version}-rt{rt}.zip",
+                    "size": 2048,
+                    "sha256": "bb" * 32,
+                },
+            ],
+        }
+    ).encode("utf-8")
+
+
 def test_check_reports_update_when_remote_is_newer(monkeypatch):
     monkeypatch.setattr(updater, "__version__", "0.1.0")
     _patch_get(monkeypatch, _release_json("v0.2.0"))
@@ -196,6 +222,55 @@ def test_launch_starts_process_and_exits(monkeypatch, tmp_path):
 def test_repo_constant_matches_api_url():
     assert updater.GITHUB_REPO in updater.RELEASES_LATEST_API
     assert updater.RELEASES_LATEST_API.startswith("https://api.github.com/")
+
+
+def test_check_prefers_mirror_manifest(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "__version__", "0.1.0")
+    monkeypatch.setattr(updater, "installed_runtime_version", lambda: "1")
+    monkeypatch.setattr(updater, "engine_dir", lambda: tmp_path)
+    monkeypatch.setattr(updater, "_engine_writable", lambda: True)
+    seen_urls = []
+
+    def fake_get(url, timeout, accept=None):
+        seen_urls.append(url)
+        assert accept is None
+        return _mirror_manifest("v0.2.0", rt="1")
+
+    monkeypatch.setattr(updater, "_http_get", fake_get)
+    info = updater.check_for_update()
+
+    assert seen_urls == [updater.DEFAULT_UPDATE_MANIFEST_URL]
+    assert info.update_available is True
+    assert info.kind == "engine"
+    assert info.latest == "0.2.0"
+    assert info.notes == "mirror notes"
+    assert info.html_url.endswith("/v0.2.0")
+    assert info.installer_url.startswith("https://aidraw.cv/geoscan-updates/")
+    assert info.installer_sha256 == "aa" * 32
+    assert info.engine_url.endswith("/engine-0.2.0-rt1.zip")
+    assert info.engine_sha256 == "bb" * 32
+
+
+def test_check_falls_back_to_github_when_mirror_fails(monkeypatch):
+    monkeypatch.setattr(updater, "__version__", "0.1.0")
+    seen_urls = []
+
+    def fake_get(url, timeout, accept=None):
+        seen_urls.append((url, accept))
+        if url == updater.DEFAULT_UPDATE_MANIFEST_URL:
+            raise updater.UpdateError("mirror down")
+        return _release_json("v0.2.0")
+
+    monkeypatch.setattr(updater, "_http_get", fake_get)
+    info = updater.check_for_update()
+
+    assert seen_urls == [
+        (updater.DEFAULT_UPDATE_MANIFEST_URL, None),
+        (updater.RELEASES_LATEST_API, "application/vnd.github+json"),
+    ]
+    assert info.update_available is True
+    assert info.kind == "installer"
+    assert info.installer_url.endswith(updater.INSTALLER_ASSET_NAME)
 
 
 # --------------------------------------------------------------------------

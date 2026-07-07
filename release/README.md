@@ -2,7 +2,7 @@
 
 本目录是发布工具链，**与 `packaging/` 并存**：`packaging/` 是 PyInstaller spec +
 GDAL bundle 的所在，本目录提供「干净构建 → 瘦身 → 出安装包 → 发布到 GitHub
-Releases → 客户端自动升级」的外层流程。
+Releases → 生成国内镜像 manifest → 客户端自动升级」的外层流程。
 
 ## 组成
 
@@ -11,11 +11,14 @@ Releases → 客户端自动升级」的外层流程。
 | `requirements-runtime.txt` | 仅列真实运行时依赖（干净 venv 用） | ✅ 可用 |
 | `build_clean.ps1` | 干净 venv 构建 + Tauri 控制台 + 瘦身 + 冒烟 | ✅ 可用 |
 | `trim_gdal.ps1` | GDAL 裁剪（默认 dry-run，`-Apply` 才删） | ✅ 可用 |
+| `build_update_manifest.py` | 生成可同步到 HK VPS 的 `latest.json` + release 文件树 | ✅ 可用 |
+| `publish_dual_release.ps1` | GitHub Release + HK VPS 镜像的双发布编排脚本 | ✅ 可用 |
 | `installer/installer.iss` | Inno Setup 出 `GeoScanSetup.exe` | ✅ 可用 |
 
 客户端自动升级的**程序侧**逻辑不在本目录，而在 `src/geoscan/updater.py`
-（对 GitHub Releases 的 `releases/latest` 查询 / 下载 / 校验 / 换装），由
-控制台（engine_host 的 `check_update`/`apply_engine_update` 命令）使用。
+（优先读 HK 静态镜像 `latest.json`，失败后回退 GitHub Releases 的
+`releases/latest` 查询 / 下载 / 校验 / 换装），由控制台（engine_host 的
+`check_update`/`apply_engine_update` 命令）使用。
 测试见 `tests/test_updater.py`。
 
 ## 安装布局（唯一界面：控制台；经典 tkinter 界面已移除）
@@ -86,6 +89,37 @@ GDAL 属于**运行时层**（稳定）。加/换 GDAL 时把 `packaging/runtime
 
 ## 发布一个新版本（GitHub Releases）
 
+常规发布优先用双发布脚本。它把同一份 `GeoScanSetup.exe` 和
+`engine-<版本>-rt<N>.zip` 同步到两个渠道：
+
+- GitHub Release：官方归档、公开记录、备用下载源。
+- HK VPS：国内用户手动下载和软件内自动更新的优先源。
+
+先预览：
+
+```powershell
+release\publish_dual_release.ps1 -DryRun
+```
+
+正式执行：
+
+```powershell
+release\publish_dual_release.ps1 -Notes "本次更新内容：..."
+```
+
+若已经打包好，只想用现有 `dist\installer\GeoScanSetup.exe` 和
+`dist\engine-<版本>-rt<N>.zip` 发布：
+
+```powershell
+release\publish_dual_release.ps1 -SkipBuild -Notes "本次更新内容：..."
+```
+
+脚本顺序是：构建资产 → 创建/更新 GitHub Release → 生成
+`dist\update_mirror\` → 上传 HK VPS 镜像资产 → **最后上传 `latest.json`**。
+最后一步不能提前，否则客户端可能看到新版本但安装包还没传完。
+
+下面是手动流程，作为脚本失败时的拆解路径。
+
 ```powershell
 # 0. bump 版本号（三处必须一致）：src/geoscan/__init__.py 的 __version__、
 #    installer.iss 的 AppVersion、以及下面的 Release tag v<版本>。提交并推送。
@@ -99,16 +133,32 @@ Copy-Item -Recurse packaging\gdal_bundle dist\GeoScan\gdal   # 直接 PyInstalle
 python release\build_engine_zip.py             # -> dist\engine-<版本>-rt<N>.zip（轻量）
 ISCC release\installer\installer.iss           # -> dist\installer\GeoScanSetup.exe（整包，含 gdal）
 
-# 3. 发布，同时上传两个资产
+# 3. 发布，同时上传两个资产（GitHub 仍是源码和正式 release 记录）
 gh release create v<版本> `
   dist\installer\GeoScanSetup.exe `
   dist\engine-<版本>-rt<N>.zip `
   --title "GeoScan v<版本>" --notes "本次更新内容：..."
+
+# 4. 生成 HK 镜像目录（给国内用户检查更新和下载）
+python release\build_update_manifest.py `
+  --base-url https://aidraw.cv/geoscan-updates `
+  --notes "本次更新内容：..."
+
+# 5. 上传到 HK VPS，latest.json 必须最后上传
+scp -r dist\update_mirror\GeoScanSetup.exe dist\update_mirror\releases aidraw-vps:/var/www/geoscan-updates/
+scp dist\update_mirror\latest.json aidraw-vps:/var/www/geoscan-updates/
 ```
 
 > 0.2.0 特例：runtime line 2→3（安装布局加入了 GeoScanConsole.exe），老客户端
 > 不会匹配 rt3 引擎包，自动回退整包安装器——这是有意的，engine zip 无法送达
 > 控制台 exe。
+
+`build_update_manifest.py` 输出 `dist\update_mirror\latest.json`、
+`dist\update_mirror\GeoScanSetup.exe`（最新版安装包固定下载链接）和
+`dist\update_mirror\releases\v<版本>\...`。把 `dist\update_mirror\` 的内容同步到
+HK VPS 的 `/geoscan-updates/` 静态目录即可。用户手动下载使用
+`https://aidraw.cv/geoscan-updates/GeoScanSetup.exe`；客户端自动更新默认先读
+`https://aidraw.cv/geoscan-updates/latest.json`，该地址不可达时才回退 GitHub。
 
 发布后：已在两层版（≥0.1.3）上的用户点「检查更新」→ 只下 ~180KB 引擎包 → 自动重启生效；
 运行时号变了或还在旧单层版的用户 → 回退整包 `GeoScanSetup.exe`。
@@ -118,9 +168,10 @@ gh release create v<版本> `
 
 ## 安全边界（不可破坏）
 
-- **公开仓库 = 零凭据下载**：Release 资产任何人可下载，`updater.py` 不含任何密钥。
-- **校验**：Release 资产若带 sha256 digest（GitHub 现会记录），下载后逐字节校验；
-  传输本身走 HTTPS。
+- **公开仓库 / HK 镜像 = 零凭据下载**：Release 资产任何人可下载，`updater.py`
+  不含任何密钥。
+- **校验**：HK 镜像 manifest 的 `sha256` 或 GitHub Release 资产 digest 都会被
+  下载端逐字节校验；传输本身走 HTTPS。
 - **配置不入包**：`mapgis_settings.json` / DPAPI 加密的 `mapgis_ai_key.dat` 只在
   `%LOCALAPPDATA%`，永不进安装包、不进仓库、不进日志。
 

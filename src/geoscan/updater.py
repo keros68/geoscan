@@ -1,4 +1,4 @@
-"""Client-side auto-update against GitHub Releases (two-layer model).
+"""Client-side auto-update against mirrored manifests + GitHub Releases.
 
 GeoScan installs as two layers:
   * **runtime** — the frozen Python + numpy/cv2/onnxruntime/rapidocr/... (~100 MB,
@@ -18,8 +18,9 @@ Release assets per version:
 
 Security posture (public repo — no secrets needed): assets are downloadable with
 no credentials; transport is HTTPS; each download is sha256-verified against the
-GitHub-recorded asset ``digest`` when present. Stdlib-only (urllib/zipfile) so it
-works inside the frozen build with no extra wheels.
+mirror manifest's ``sha256`` or GitHub-recorded asset ``digest`` when present.
+Stdlib-only (urllib/zipfile) so it works inside the frozen build with no extra
+wheels.
 """
 
 from __future__ import annotations
@@ -45,6 +46,11 @@ from geoscan import __version__
 # The public repo that hosts releases. Update-check URL is derived from it.
 GITHUB_REPO = "keros68/geoscan"
 RELEASES_LATEST_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+
+# Domestic/near-China mirror checked before GitHub. Set GEOSCAN_UPDATE_MANIFEST_URL
+# to another HTTPS latest.json endpoint when the download host changes.
+DEFAULT_UPDATE_MANIFEST_URL = "https://aidraw.cv/geoscan-updates/latest.json"
+UPDATE_MANIFEST_ENV = "GEOSCAN_UPDATE_MANIFEST_URL"
 
 # The installer asset to look for on a release. Must match the Inno Setup
 # OutputBaseFilename in release/installer/installer.iss.
@@ -186,6 +192,23 @@ def _explain_http_error(exc: urllib.error.HTTPError) -> str:
     return f"更新服务器返回错误 HTTP {exc.code}。"
 
 
+def _release_sources() -> list[tuple[str, str | None]]:
+    """Ordered update metadata sources: mirror first, then GitHub fallback."""
+    sources: list[tuple[str, str | None]] = []
+    mirror = os.environ.get(UPDATE_MANIFEST_ENV, DEFAULT_UPDATE_MANIFEST_URL).strip()
+    if mirror:
+        sources.append((mirror, None))
+    sources.append((RELEASES_LATEST_API, "application/vnd.github+json"))
+
+    unique: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
+    for url, accept in sources:
+        if url not in seen:
+            unique.append((url, accept))
+            seen.add(url)
+    return unique
+
+
 def _download_to(
     url: str,
     target: Path,
@@ -250,22 +273,71 @@ def _asset_sha256(asset: dict) -> str:
     digest = str(asset.get("digest", ""))
     if digest.startswith("sha256:"):
         return digest[len("sha256:"):].lower()
+    sha256 = str(asset.get("sha256", "")).strip().lower()
+    if sha256.startswith("sha256:"):
+        sha256 = sha256[len("sha256:"):]
+    if re.fullmatch(r"[0-9a-f]{64}", sha256):
+        return sha256
     return ""
 
 
+def _normalise_asset(asset: dict) -> dict:
+    """Accept both GitHub release assets and our static mirror asset shape."""
+    out = dict(asset)
+    if not out.get("browser_download_url") and out.get("url"):
+        out["browser_download_url"] = str(out["url"])
+    if out.get("sha256") and not out.get("digest"):
+        sha256 = str(out["sha256"]).strip()
+        out["digest"] = sha256 if sha256.startswith("sha256:") else f"sha256:{sha256}"
+    return out
+
+
+def _normalise_release(release: dict) -> dict:
+    """Accept GitHub /releases/latest JSON or GeoScan's static latest.json."""
+    if not isinstance(release, dict):
+        raise UpdateError("更新信息格式异常（不是 JSON 对象）。")
+
+    out = dict(release)
+    tag = str(out.get("tag_name") or out.get("tag") or "").strip()
+    version = str(out.get("version") or "").strip().lstrip("vV")
+    if not tag and version:
+        tag = f"v{version}"
+    out["tag_name"] = tag
+    if "body" not in out:
+        out["body"] = str(out.get("notes", "") or "")
+    if "html_url" not in out:
+        out["html_url"] = str(out.get("github", "") or "")
+    assets = out.get("assets") or []
+    if not isinstance(assets, list):
+        raise UpdateError("更新信息格式异常（assets 不是数组）。")
+    out["assets"] = [_normalise_asset(asset) for asset in assets if isinstance(asset, dict)]
+    return out
+
+
+def _fetch_latest_release(timeout: float) -> dict:
+    errors: list[str] = []
+    for url, accept in _release_sources():
+        try:
+            raw = _http_get(url, timeout, accept=accept)
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise UpdateError("更新信息解析失败（服务器返回了非预期内容）。") from exc
+            return _normalise_release(payload)
+        except UpdateError as exc:
+            errors.append(f"{url}: {exc}")
+    raise UpdateError("所有更新源均不可用：" + "；".join(errors))
+
+
 def check_for_update(timeout: float = 12.0) -> UpdateInfo:
-    """Query the latest release and decide whether/how to update.
+    """Query update metadata and decide whether/how to update.
 
     Prefers a lightweight engine update when the release ships an engine zip for
     the installed runtime line and the engine dir is writable; otherwise falls
     back to the full installer. Raises UpdateError on network/parse failure;
     never raises for the ordinary "already up to date" case.
     """
-    raw = _http_get(RELEASES_LATEST_API, timeout, accept="application/vnd.github+json")
-    try:
-        release = json.loads(raw.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise UpdateError("更新信息解析失败（服务器返回了非预期内容）。") from exc
+    release = _fetch_latest_release(timeout)
 
     if release.get("draft") or release.get("prerelease"):
         return UpdateInfo(current=__version__, latest=__version__, update_available=False)
@@ -436,6 +508,7 @@ def _spawn_detached(argv: list[str]) -> None:
 
 
 __all__ = [
+    "DEFAULT_UPDATE_MANIFEST_URL",
     "GITHUB_REPO",
     "UpdateInfo",
     "UpdateError",
