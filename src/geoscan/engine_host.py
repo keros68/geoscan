@@ -517,7 +517,11 @@ def list_history(parent: Path, limit: int = 20) -> list[dict[str, Any]]:
 
 
 def preflight(conversion_mode: str = "cli", export_dxf: bool = True) -> dict[str, Any]:
-    from geoscan.env_probe import DONGLE_PROCESS_NAME, dongle_process_running, program_candidates
+    from geoscan.env_probe import (
+        dongle_process_running,
+        program_candidates,
+        resolve_dongle_process_name,
+    )
     from geoscan.production_accuracy_workflow import resolve_ogr2ogr
 
     settings = read_machine_settings()
@@ -578,12 +582,13 @@ def preflight(conversion_mode: str = "cli", export_dxf: bool = True) -> dict[str
         ogr_detail = "当前未请求 DXF/SHP 输出"
     checks.append({"key": "ogr2ogr", "label": "ogr2ogr / GDAL", "state": ogr_state, "detail": ogr_detail or "未找到；DXF 导出需要"})
 
+    dongle_process_name = resolve_dongle_process_name(settings)
     if needs_mapgis:
-        dongle_ok = dongle_process_running()
+        dongle_ok = dongle_process_running(dongle_process_name)
         checks.append(
             {
                 "key": "dongle",
-                "label": f"MapGIS 密码狗 ({DONGLE_PROCESS_NAME})",
+                "label": f"MapGIS 密码狗 ({dongle_process_name})",
                 "state": "ok" if dongle_ok else "warn",
                 "detail": "运行中" if dongle_ok else "未检测到——cli 转换会失败",
             }
@@ -592,7 +597,7 @@ def preflight(conversion_mode: str = "cli", export_dxf: bool = True) -> dict[str
         checks.append(
             {
                 "key": "dongle",
-                "label": f"MapGIS 密码狗 ({DONGLE_PROCESS_NAME})",
+                "label": f"MapGIS 密码狗 ({dongle_process_name})",
                 "state": "skip",
                 "detail": "当前未请求 MapGIS WL/WT 输出",
             }
@@ -722,9 +727,9 @@ class EngineHost:
         return {"opened": str(path)}
 
     def cmd_dongle_status(self, args: dict[str, Any]) -> dict[str, Any]:
-        from geoscan.env_probe import DONGLE_PROCESS_NAME, dongle_process_running
+        from geoscan.env_probe import dongle_status, resolve_dongle_process_name
 
-        return {"running": dongle_process_running(), "process": DONGLE_PROCESS_NAME}
+        return dongle_status(resolve_dongle_process_name(read_machine_settings()))
 
     def cmd_check_update(self, args: dict[str, Any]) -> dict[str, Any]:
         from geoscan import updater

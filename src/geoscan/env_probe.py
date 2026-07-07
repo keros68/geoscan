@@ -36,14 +36,41 @@ MAPGIS_PROGRAM_NAMES = {
 # verification timeout (~300s of wasted work). Checking that this process is
 # running is a fast, reliable pre-flight for that failure mode.
 DONGLE_PROCESS_NAME = "dog67.exe"
+DONGLE_PROCESS_SETTING_KEY = "dongle_process_name"
+DONGLE_PROCESS_ENV_NAME = "MAPGIS67_DONGLE_PROCESS_NAME"
 
 
-def dongle_process_running(process_name: str = DONGLE_PROCESS_NAME) -> bool:
+def normalize_dongle_process_name(value: object | None) -> str:
+    """Normalize a user-supplied dongle process setting to a tasklist image name."""
+    text = str(value or "").strip().strip('"')
+    if not text:
+        return DONGLE_PROCESS_NAME
+    # Accept either a bare process name or a picked exe path from the settings UI.
+    name = text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].strip()
+    if not name:
+        return DONGLE_PROCESS_NAME
+    if "." not in name:
+        name += ".exe"
+    return name
+
+
+def resolve_dongle_process_name(settings: Mapping[str, str] | None = None) -> str:
+    """Configured dongle process image name, defaulting to ``dog67.exe``."""
+    configured = os.environ.get(DONGLE_PROCESS_ENV_NAME, "").strip()
+    if not configured and settings is not None:
+        configured = str(settings.get(DONGLE_PROCESS_SETTING_KEY) or "").strip()
+    return normalize_dongle_process_name(configured)
+
+
+def dongle_process_running(process_name: str | None = None) -> bool:
     """Return True if the MapGIS dongle service process is currently running.
 
     Windows-only (uses ``tasklist``). On any other platform, or if the query
     itself fails, returns False (treated as "cannot confirm the dongle").
     """
+    process_name = resolve_dongle_process_name(
+        {DONGLE_PROCESS_SETTING_KEY: process_name} if process_name else None
+    )
     if not sys.platform.startswith("win"):
         return False
     import subprocess
@@ -64,8 +91,11 @@ def dongle_process_running(process_name: str = DONGLE_PROCESS_NAME) -> bool:
     return process_name.lower() in output
 
 
-def dongle_status(process_name: str = DONGLE_PROCESS_NAME) -> dict:
+def dongle_status(process_name: str | None = None) -> dict:
     """Structured dongle pre-flight result for reports and the GUI status line."""
+    process_name = resolve_dongle_process_name(
+        {DONGLE_PROCESS_SETTING_KEY: process_name} if process_name else None
+    )
     running = dongle_process_running(process_name)
     return {
         "process": process_name,

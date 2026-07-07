@@ -11,6 +11,7 @@ interface Props {
 interface SettingsForm {
   section_exe: string;
   w60_conv_exe: string;
+  dongle_process_name: string;
   ogr2ogr: string;
   gdal_data: string;
   ocr_python: string;
@@ -20,6 +21,7 @@ interface SettingsForm {
 const EMPTY: SettingsForm = {
   section_exe: "",
   w60_conv_exe: "",
+  dongle_process_name: "",
   ogr2ogr: "",
   gdal_data: "",
   ocr_python: "",
@@ -29,6 +31,11 @@ const EMPTY: SettingsForm = {
 const FIELDS: { key: keyof SettingsForm; label: string; directory?: boolean; hint?: string }[] = [
   { key: "section_exe", label: "SECTION 程序 (section.exe)" },
   { key: "w60_conv_exe", label: "W60 转换程序 (W60_Conv.exe)" },
+  {
+    key: "dongle_process_name",
+    label: "MapGIS 密码狗进程 / exe",
+    hint: "默认 dog67.exe；可填进程名，也可选择模拟狗 exe",
+  },
   { key: "ogr2ogr", label: "ogr2ogr (QGIS/自带)" },
   { key: "gdal_data", label: "GDAL 数据目录（可选）", directory: true },
   { key: "ocr_python", label: "OCR 解释器（可选）", hint: "留空时文字候选为占位框，属正常" },
@@ -49,6 +56,7 @@ export default function SettingsDialog(props: Props) {
         setForm({
           section_exe: settings.section_exe ?? "",
           w60_conv_exe: settings.w60_conv_exe ?? "",
+          dongle_process_name: settings.dongle_process_name ?? "",
           ogr2ogr: settings.ogr2ogr ?? "",
           gdal_data: settings.gdal_data ?? "",
           ocr_python: settings.ocr_python ?? "",

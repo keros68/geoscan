@@ -435,7 +435,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--skip-dongle-check",
         action="store_true",
-        help="Skip the cli dongle pre-flight (dog67.exe). Use only if the dongle service is named differently.",
+        help=(
+            "Skip the cli dongle pre-flight. Prefer setting "
+            "MAPGIS67_DONGLE_PROCESS_NAME when the dongle process is named differently."
+        ),
     )
     run.add_argument(
         "--retry-incomplete",

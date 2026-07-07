@@ -10,8 +10,11 @@ import pytest
 
 from geoscan import batch_runner, production_program
 from geoscan.env_probe import (
+    DONGLE_PROCESS_ENV_NAME,
     DONGLE_PROCESS_NAME,
     dongle_status,
+    normalize_dongle_process_name,
+    resolve_dongle_process_name,
 )
 from geoscan.production_program import (
     DonglePrecheckError,
@@ -20,14 +23,70 @@ from geoscan.production_program import (
 )
 
 
-def test_dongle_status_shape() -> None:
+def test_dongle_status_shape(monkeypatch) -> None:
+    monkeypatch.delenv(DONGLE_PROCESS_ENV_NAME, raising=False)
+
     status = dongle_status()
+
     assert status["process"] == DONGLE_PROCESS_NAME
     assert isinstance(status["running"], bool)
     assert isinstance(status["checked"], bool)
 
 
+def test_dongle_process_name_can_be_configured_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("MAPGIS67_DONGLE_PROCESS_NAME", r"C:\mapgis67\dog\SimDog.exe")
+
+    assert resolve_dongle_process_name() == "SimDog.exe"
+
+
+def test_dongle_env_process_name_wins_over_settings(monkeypatch) -> None:
+    monkeypatch.setenv(DONGLE_PROCESS_ENV_NAME, "EnvDog.exe")
+
+    assert (
+        resolve_dongle_process_name({"dongle_process_name": "SavedDog.exe"})
+        == "EnvDog.exe"
+    )
+
+
+def test_dongle_process_name_normalizes_bare_names_and_paths() -> None:
+    assert normalize_dongle_process_name("alt_dog") == "alt_dog.exe"
+    assert normalize_dongle_process_name(r"D:\mapgis67\program\alt_dog.exe") == "alt_dog.exe"
+    assert normalize_dongle_process_name("") == DONGLE_PROCESS_NAME
+
+
+def test_dongle_setting_exports_process_name_env(monkeypatch) -> None:
+    from geoscan.app_settings import apply_settings_to_env
+
+    monkeypatch.delenv(DONGLE_PROCESS_ENV_NAME, raising=False)
+
+    applied = apply_settings_to_env(
+        {"dongle_process_name": r"D:\mapgis67\program\SimDog.exe"}
+    )
+
+    assert applied[DONGLE_PROCESS_ENV_NAME] == r"D:\mapgis67\program\SimDog.exe"
+    monkeypatch.delenv(DONGLE_PROCESS_ENV_NAME, raising=False)
+
+
+def test_dongle_precheck_message_uses_configured_process_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MAPGIS67_DONGLE_PROCESS_NAME", "SimDog.exe")
+    monkeypatch.setattr(production_program, "dongle_process_running", lambda: False)
+
+    with pytest.raises(DonglePrecheckError) as excinfo:
+        run_production_program(
+            ProgramConfig(
+                project_root=tmp_path,
+                source_raster=tmp_path / "missing.tif",
+                map_id="T01_9989",
+                conversion_mode="cli",
+            )
+        )
+
+    assert "SimDog.exe" in str(excinfo.value)
+    assert DONGLE_PROCESS_NAME not in str(excinfo.value)
+
+
 def test_cli_run_fails_fast_without_dongle(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv(DONGLE_PROCESS_ENV_NAME, raising=False)
     monkeypatch.setattr(production_program, "dongle_process_running", lambda: False)
     with pytest.raises(DonglePrecheckError) as excinfo:
         run_production_program(

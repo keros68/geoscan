@@ -27,6 +27,7 @@ from geoscan.mapgis67_bridge import (
 from geoscan.env_probe import (
     DONGLE_PROCESS_NAME,
     dongle_process_running,
+    resolve_dongle_process_name,
 )
 from geoscan.grouped_exchange import safe_target_stem
 from geoscan.line_candidate_workflow import generate_review_line_candidates
@@ -67,13 +68,14 @@ class DonglePrecheckError(RuntimeError):
 
 
 def _dongle_precheck_message() -> str:
+    process_name = resolve_dongle_process_name()
     return (
-        f"MapGIS 密码狗服务 {DONGLE_PROCESS_NAME} 未在运行——cli 转换会在最后一步失败。\n"
-        f"请插好加密狗并启动 {DONGLE_PROCESS_NAME} 后重试；"
+        f"MapGIS 密码狗服务 {process_name} 未在运行——cli 转换会在最后一步失败。\n"
+        f"请插好加密狗并启动 {process_name} 后重试；"
         "或把转换模式改为 none / prepare（只出候选和 DXF，不需要密码狗）。\n"
-        f"MapGIS dongle service {DONGLE_PROCESS_NAME} is not running; cli conversion "
+        f"MapGIS dongle service {process_name} is not running; cli conversion "
         "would fail at the last step. Plug in the dongle and start "
-        f"{DONGLE_PROCESS_NAME}, then retry — or use conversion-mode none/prepare."
+        f"{process_name}, then retry — or use conversion-mode none/prepare."
     )
 VALID_CONVERSION_MODES = {"none", "prepare", "cli"}
 VALID_LINE_REPAIR_MODES = {"off", "conservative"}
@@ -1464,7 +1466,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Skip the cli dongle pre-flight (checks the MapGIS dongle service "
             f"{DONGLE_PROCESS_NAME} is running). Use only if the dongle service is "
-            "named differently on this machine."
+            "not configured for this machine."
         ),
     )
     return parser

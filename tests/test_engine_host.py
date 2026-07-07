@@ -133,6 +133,40 @@ def test_preflight_skips_unselected_output_tool_checks(monkeypatch):
     assert checks["dongle"]["state"] == "skip"
 
 
+def test_preflight_uses_configured_dongle_process_name(monkeypatch, tmp_path):
+    import geoscan.engine_host as engine_host
+    import geoscan.env_probe as env_probe
+    import geoscan.production_accuracy_workflow as accuracy
+
+    monkeypatch.delenv("MAPGIS67_DONGLE_PROCESS_NAME", raising=False)
+    section = tmp_path / "section.exe"
+    w60 = tmp_path / "W60_Conv.exe"
+    ogr = tmp_path / "ogr2ogr.exe"
+    for path in (section, w60, ogr):
+        path.write_bytes(b"x")
+    seen = []
+
+    monkeypatch.setattr(
+        engine_host,
+        "read_machine_settings",
+        lambda: {"dongle_process_name": r"C:\mapgis67\dog\SimDog.exe"},
+    )
+    monkeypatch.setattr(
+        env_probe,
+        "program_candidates",
+        lambda program: {"section": [section], "w60_conv": [w60]}[program],
+    )
+    monkeypatch.setattr(env_probe, "dongle_process_running", lambda process_name=None: seen.append(process_name) or False)
+    monkeypatch.setattr(accuracy, "resolve_ogr2ogr", lambda: ogr)
+
+    report = preflight(conversion_mode="cli", export_dxf=True)
+    checks = {check["key"]: check for check in report["checks"]}
+
+    assert seen == ["SimDog.exe"]
+    assert checks["dongle"]["label"] == "MapGIS 密码狗 (SimDog.exe)"
+    assert checks["dongle"]["state"] == "warn"
+
+
 def test_stage_states_from_successful_report(tmp_path):
     load_folder = tmp_path / "MAPGIS_LOAD_READY"
     load_folder.mkdir()

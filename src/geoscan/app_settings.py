@@ -10,6 +10,7 @@ pipeline already honors:
 - ``gdal_data``    -> ``MAPGIS_GDAL_DATA``    (DXF export)
 - ``section_exe``  -> ``MAPGIS67_SECTION_EXE`` (bridge conversion)
 - ``w60_conv_exe`` -> ``MAPGIS67_W60_CONV_EXE`` (bridge conversion)
+- ``dongle_process_name`` -> ``MAPGIS67_DONGLE_PROCESS_NAME`` (dongle pre-flight)
 - ``ocr_python``   -> ``MAPGIS_OCR_PYTHON``   (external OCR interpreter)
 
 Resolution order stays: explicit argument > environment variable > settings
@@ -33,6 +34,7 @@ SETTINGS_ENV_KEYS: dict[str, str] = {
     "gdal_data": "MAPGIS_GDAL_DATA",
     "section_exe": "MAPGIS67_SECTION_EXE",
     "w60_conv_exe": "MAPGIS67_W60_CONV_EXE",
+    "dongle_process_name": "MAPGIS67_DONGLE_PROCESS_NAME",
     "ocr_python": "MAPGIS_OCR_PYTHON",
 }
 

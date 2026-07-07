@@ -4,5 +4,6 @@
   "gdal_data": "",
   "section_exe": "",
   "w60_conv_exe": "",
+  "dongle_process_name": "",
   "ocr_python": ""
 }
