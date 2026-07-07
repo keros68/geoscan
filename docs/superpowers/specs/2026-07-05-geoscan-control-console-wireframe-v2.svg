@@ -1,0 +1,227 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1024" viewBox="0 0 1440 1024">
+  <defs>
+    <style>
+      .app { fill: #eef1f4; }
+      .titlebar { fill: #18202a; }
+      .toolbar { fill: #f8fafb; stroke: #cbd3db; stroke-width: 1; }
+      .nav { fill: #202832; }
+      .nav-row { fill: #202832; }
+      .nav-active { fill: #2c3642; }
+      .canvas { fill: #f4f6f8; }
+      .panel { fill: #ffffff; stroke: #c4ccd5; stroke-width: 1; }
+      .panel-weak { fill: #f9fbfc; stroke: #cbd3db; stroke-width: 1; }
+      .field { fill: #ffffff; stroke: #aeb8c2; stroke-width: 1; }
+      .button-main { fill: #245f45; }
+      .button { fill: #ffffff; stroke: #9facba; stroke-width: 1; }
+      .stage-done { fill: #e7f0eb; stroke: #245f45; stroke-width: 1.2; }
+      .stage-run { fill: #e8f0f8; stroke: #1f5f9a; stroke-width: 1.2; }
+      .stage-wait { fill: #f3f5f7; stroke: #c4ccd5; stroke-width: 1; }
+      .stage-warn { fill: #fff5dd; stroke: #a56810; stroke-width: 1.2; }
+      .ink { fill: #141b24; font-family: "Microsoft YaHei UI", "Segoe UI", Arial, sans-serif; }
+      .light { fill: #e9eef2; font-family: "Microsoft YaHei UI", "Segoe UI", Arial, sans-serif; }
+      .muted { fill: #5f6b78; font-family: "Microsoft YaHei UI", "Segoe UI", Arial, sans-serif; }
+      .white { fill: #ffffff; font-family: "Microsoft YaHei UI", "Segoe UI", Arial, sans-serif; }
+      .mono { font-family: "Cascadia Mono", "Consolas", monospace; }
+      .title { font-size: 15px; font-weight: 700; }
+      .h { font-size: 16px; font-weight: 700; }
+      .body { font-size: 13px; }
+      .small { font-size: 12px; }
+      .tiny { font-size: 11px; }
+      .line { stroke: #c4ccd5; stroke-width: 1; }
+      .mapline { fill: none; stroke: #8794a2; stroke-width: 1; opacity: 0.55; }
+      .mapbold { fill: none; stroke: #405060; stroke-width: 1.8; opacity: 0.7; }
+    </style>
+  </defs>
+
+  <rect width="1440" height="1024" class="app"/>
+
+  <!-- App title bar -->
+  <rect x="0" y="0" width="1440" height="34" class="titlebar"/>
+  <text x="18" y="22" class="white title">GeoScan</text>
+  <text x="92" y="22" class="light small">T01_0006 · Semi-automatic section-map vectorization</text>
+  <text x="1294" y="22" class="light small">v0.1.x</text>
+
+  <!-- Command toolbar -->
+  <rect x="0" y="34" width="1440" height="54" class="toolbar"/>
+  <rect x="190" y="46" width="108" height="30" rx="4" class="button-main"/>
+  <text x="222" y="66" class="white small">运行</text>
+  <rect x="306" y="46" width="92" height="30" rx="4" class="button"/>
+  <text x="331" y="66" class="ink small">停止</text>
+  <rect x="406" y="46" width="122" height="30" rx="4" class="button"/>
+  <text x="431" y="66" class="ink small">打开输出</text>
+  <rect x="548" y="46" width="148" height="30" rx="4" class="button"/>
+  <text x="570" y="66" class="ink small">重新检测环境</text>
+  <text x="730" y="66" class="muted small">工作区</text>
+  <rect x="780" y="46" width="406" height="30" class="field"/>
+  <text x="792" y="66" class="muted small mono">E:\mapgiswork\production_runs\...</text>
+  <rect x="1212" y="46" width="96" height="30" rx="4" class="stage-done"/>
+  <text x="1232" y="66" class="ink small">可运行</text>
+  <rect x="1318" y="46" width="94" height="30" rx="4" class="button"/>
+  <text x="1342" y="66" class="ink small">更新</text>
+
+  <!-- Left navigation -->
+  <rect x="0" y="88" width="170" height="936" class="nav"/>
+  <text x="18" y="124" class="light title">工作流</text>
+  <rect x="0" y="146" width="170" height="42" class="nav-active"/>
+  <rect x="0" y="146" width="4" height="42" fill="#55a37b"/>
+  <text x="20" y="172" class="white body">单张运行</text>
+  <rect x="0" y="188" width="170" height="42" class="nav-row"/>
+  <text x="20" y="214" class="light body">批量运行</text>
+  <rect x="0" y="230" width="170" height="42" class="nav-row"/>
+  <text x="20" y="256" class="light body">任务记录</text>
+  <line x1="16" y1="294" x2="154" y2="294" stroke="#384450" stroke-width="1"/>
+  <text x="18" y="326" class="light title">系统</text>
+  <text x="20" y="362" class="light body">设置</text>
+  <text x="20" y="404" class="light body">AI 接入</text>
+  <text x="20" y="446" class="light body">更新</text>
+  <line x1="16" y1="486" x2="154" y2="486" stroke="#384450" stroke-width="1"/>
+  <text x="18" y="520" class="light title">模式</text>
+  <rect x="18" y="540" width="56" height="26" rx="3" fill="#e7f0eb"/>
+  <text x="33" y="558" class="ink tiny">新手</text>
+  <rect x="80" y="540" width="56" height="26" rx="3" fill="#2c3642"/>
+  <text x="95" y="558" class="light tiny">专家</text>
+
+  <!-- Stage strip -->
+  <rect x="170" y="88" width="1270" height="74" fill="#ffffff" stroke="#cbd3db" stroke-width="1"/>
+  <text x="192" y="118" class="ink h">工序状态</text>
+  <text x="192" y="142" class="muted small">本栏显示真实产物状态，不等同于质量验收。</text>
+
+  <rect x="358" y="104" width="142" height="42" rx="4" class="stage-done"/>
+  <text x="374" y="122" class="ink tiny mono">00_INPUT</text>
+  <text x="374" y="140" class="ink small">输入冻结完成</text>
+  <rect x="508" y="104" width="142" height="42" rx="4" class="stage-done"/>
+  <text x="524" y="122" class="ink tiny mono">04_LINE</text>
+  <text x="524" y="140" class="ink small">线候选 120</text>
+  <rect x="658" y="104" width="142" height="42" rx="4" class="stage-run"/>
+  <text x="674" y="122" class="ink tiny mono">05_TEXT</text>
+  <text x="674" y="140" class="ink small">文字识别中</text>
+  <rect x="808" y="104" width="142" height="42" rx="4" class="stage-wait"/>
+  <text x="824" y="122" class="muted tiny mono">DXF</text>
+  <text x="824" y="140" class="muted small">等待</text>
+  <rect x="958" y="104" width="142" height="42" rx="4" class="stage-wait"/>
+  <text x="974" y="122" class="muted tiny mono">SECTION</text>
+  <text x="974" y="140" class="muted small">等待</text>
+  <rect x="1108" y="104" width="142" height="42" rx="4" class="stage-wait"/>
+  <text x="1124" y="122" class="muted tiny mono">READY</text>
+  <text x="1124" y="140" class="muted small">未生成</text>
+  <rect x="1286" y="104" width="116" height="42" rx="4" class="stage-warn"/>
+  <text x="1304" y="122" class="ink tiny">提示</text>
+  <text x="1304" y="140" class="ink small">需人工核查</text>
+
+  <!-- Work area background -->
+  <rect x="170" y="162" width="1270" height="862" class="canvas"/>
+
+  <!-- Source preview panel -->
+  <rect x="190" y="184" width="548" height="490" class="panel"/>
+  <rect x="190" y="184" width="548" height="34" fill="#f7f9fa" stroke="#c4ccd5" stroke-width="1"/>
+  <text x="208" y="207" class="ink h">输入图预览</text>
+  <text x="608" y="207" class="muted small mono">t01_0006.tif</text>
+  <rect x="210" y="238" width="508" height="354" fill="#eef0ee" stroke="#aeb8c2" stroke-width="1"/>
+  <path d="M230 280 C300 250, 362 270, 430 246 C496 224, 578 250, 690 226" class="mapline"/>
+  <path d="M230 340 C320 318, 380 362, 470 336 C560 310, 626 336, 700 316" class="mapbold"/>
+  <path d="M242 420 C320 392, 426 434, 508 402 C596 366, 658 410, 704 388" class="mapline"/>
+  <path d="M254 508 C336 482, 414 512, 498 486 C588 458, 650 496, 704 470" class="mapline"/>
+  <line x1="250" y1="260" x2="682" y2="560" stroke="#bec6cf" stroke-width="1" opacity="0.5"/>
+  <line x1="250" y1="560" x2="682" y2="260" stroke="#bec6cf" stroke-width="1" opacity="0.45"/>
+  <text x="236" y="570" class="muted tiny">预览仅辅助定位；叠加检查使用像素单位 TIFF。</text>
+
+  <rect x="210" y="612" width="508" height="40" class="field"/>
+  <text x="224" y="637" class="muted small mono">E:\mapgiswork\source\t01_0006.tif</text>
+  <rect x="630" y="618" width="72" height="28" rx="3" class="button"/>
+  <text x="652" y="637" class="ink small">选择</text>
+
+  <!-- Run setup panel -->
+  <rect x="758" y="184" width="330" height="490" class="panel"/>
+  <rect x="758" y="184" width="330" height="34" fill="#f7f9fa" stroke="#c4ccd5" stroke-width="1"/>
+  <text x="776" y="207" class="ink h">运行配置</text>
+
+  <text x="778" y="244" class="muted small">Map ID</text>
+  <rect x="778" y="254" width="290" height="32" class="field"/>
+  <text x="790" y="275" class="ink small mono">T01_0006</text>
+  <text x="778" y="316" class="muted small">输出目录</text>
+  <rect x="778" y="326" width="290" height="32" class="field"/>
+  <text x="790" y="347" class="ink small mono">E:\mapgiswork\T01_0006_P</text>
+
+  <line x1="778" y1="382" x2="1068" y2="382" class="line"/>
+  <text x="778" y="410" class="ink h">新手参数</text>
+
+  <text x="778" y="438" class="muted small">输入调平</text>
+  <rect x="860" y="420" width="208" height="32" class="field"/>
+  <text x="874" y="441" class="ink small">off</text>
+
+  <text x="778" y="482" class="muted small">增强底图</text>
+  <rect x="860" y="464" width="208" height="32" class="field"/>
+  <text x="874" y="485" class="ink small">standard</text>
+
+  <text x="778" y="526" class="muted small">转换模式</text>
+  <rect x="860" y="508" width="208" height="32" class="field"/>
+  <text x="874" y="529" class="ink small">cli</text>
+
+  <line x1="778" y1="566" x2="1068" y2="566" class="line"/>
+  <rect x="778" y="590" width="290" height="44" class="panel-weak"/>
+  <text x="794" y="616" class="ink small">专家参数折叠：线引擎、线修复、OCR、fresh rerun...</text>
+  <rect x="778" y="644" width="138" height="30" rx="4" class="button-main"/>
+  <text x="825" y="664" class="white small">运行</text>
+  <rect x="930" y="644" width="138" height="30" rx="4" class="button"/>
+  <text x="971" y="664" class="ink small">停止</text>
+
+  <!-- Right operational panel -->
+  <rect x="1108" y="184" width="312" height="490" class="panel"/>
+  <rect x="1108" y="184" width="312" height="34" fill="#f7f9fa" stroke="#c4ccd5" stroke-width="1"/>
+  <text x="1126" y="207" class="ink h">预检与恢复</text>
+
+  <text x="1128" y="244" class="ink h">环境</text>
+  <line x1="1128" y1="260" x2="1400" y2="260" class="line"/>
+  <text x="1128" y="286" class="ink small">SECTION</text>
+  <text x="1342" y="286" class="ink small">就绪</text>
+  <text x="1128" y="316" class="ink small">W60_Conv</text>
+  <text x="1342" y="316" class="ink small">就绪</text>
+  <text x="1128" y="346" class="ink small">ogr2ogr</text>
+  <text x="1342" y="346" class="ink small">就绪</text>
+  <text x="1128" y="376" class="ink small">密码狗</text>
+  <text x="1342" y="376" class="ink small">运行中</text>
+  <text x="1128" y="406" class="muted small">OCR</text>
+  <text x="1296" y="406" class="muted small">内置 / fallback</text>
+
+  <line x1="1128" y1="432" x2="1400" y2="432" class="line"/>
+  <text x="1128" y="460" class="ink h">当前阶段</text>
+  <text x="1128" y="488" class="ink small">05_TEXT_WORKFLOW</text>
+  <text x="1128" y="512" class="muted small">正在生成文字候选；下游 DXF 和 W60 等待。</text>
+  <rect x="1128" y="536" width="128" height="28" rx="3" class="button"/>
+  <text x="1160" y="555" class="ink tiny">查看详情</text>
+  <rect x="1268" y="536" width="132" height="28" rx="3" class="button"/>
+  <text x="1300" y="555" class="ink tiny">复制路径</text>
+
+  <line x1="1128" y1="590" x2="1400" y2="590" class="line"/>
+  <text x="1128" y="618" class="ink h">恢复建议</text>
+  <text x="1128" y="646" class="muted small">若转换失败：保留 DXF，重新检测环境后单独重跑转换。</text>
+
+  <!-- Bottom log/output table -->
+  <rect x="190" y="696" width="1230" height="302" class="panel"/>
+  <rect x="190" y="696" width="1230" height="34" fill="#f7f9fa" stroke="#c4ccd5" stroke-width="1"/>
+  <text x="208" y="719" class="ink h">输出与日志</text>
+  <text x="330" y="719" class="muted small">候选数量、产物路径、错误原因集中在这里，不靠弹窗记忆。</text>
+
+  <rect x="210" y="752" width="1190" height="92" fill="#ffffff" stroke="#c4ccd5" stroke-width="1"/>
+  <rect x="210" y="752" width="1190" height="28" fill="#f3f5f7"/>
+  <text x="226" y="771" class="muted tiny">产物</text>
+  <text x="420" y="771" class="muted tiny">状态</text>
+  <text x="556" y="771" class="muted tiny">数量</text>
+  <text x="686" y="771" class="muted tiny">路径</text>
+  <line x1="210" y1="780" x2="1400" y2="780" class="line"/>
+  <text x="226" y="805" class="ink small">线候选 GeoJSON</text>
+  <text x="420" y="805" class="ink small">完成</text>
+  <text x="556" y="805" class="ink small mono">120</text>
+  <text x="686" y="805" class="muted small mono">04_LINE_WORKFLOW\T01_0006_review_line_candidates.geojson</text>
+  <line x1="210" y1="820" x2="1400" y2="820" class="line"/>
+  <text x="226" y="837" class="ink small">文字候选 GeoJSON</text>
+  <text x="420" y="837" class="ink small">运行中</text>
+  <text x="556" y="837" class="ink small mono">...</text>
+  <text x="686" y="837" class="muted small mono">05_TEXT_WORKFLOW\...</text>
+
+  <rect x="210" y="866" width="1190" height="112" fill="#111820"/>
+  <text x="226" y="892" class="light small mono">[12:44:12] start 05_TEXT_WORKFLOW</text>
+  <text x="226" y="916" class="light small mono">[12:44:13] using OCR/fallback detector; candidates remain unchecked</text>
+  <text x="226" y="940" class="light small mono">[12:44:18] output_root=E:\mapgiswork\T01_0006_P</text>
+  <text x="226" y="964" class="light small mono">[12:44:20] next stage: DXF_EXPORT</text>
+</svg>
