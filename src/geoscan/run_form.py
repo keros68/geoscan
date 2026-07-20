@@ -277,6 +277,18 @@ def validate_form_state(state: GuiFormState, *, settings: dict[str, str] | None 
             "没有选择任何输出文件类别：请至少打开 MapGIS 转换、导出 DXF、"
             "QGIS 文件中的一项。"
         )
+    target_files = [
+        ("WL", state.target_line_file, ".WL"),
+        ("WT", state.target_text_file, ".WT"),
+    ]
+    if state.include_areas:
+        target_files.append(("WP", state.target_area_file, ".WP"))
+    for label, value, suffix in target_files:
+        if value and Path(str(value).strip()).suffix.upper() != suffix:
+            return (
+                f"{label} 文件名必须以 {suffix} 结尾；当前值：{value}。"
+                "也可以清空该字段，由程序按 Map ID 自动命名。"
+            )
     if state.line_engine not in VALID_LINE_ENGINES:
         return "线提取引擎只能是 hough 或 trace。"
     if state.line_connect not in VALID_LINE_CONNECT_MODES:
