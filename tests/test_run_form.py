@@ -132,6 +132,44 @@ def test_validate_output_categories_reject_mapgis_without_dxf(tmp_path):
     assert "MapGIS 转换依赖 DXF" in error
 
 
+def test_validate_target_file_suffixes_before_run(tmp_path):
+    raster = tmp_path / "t02_0004.jpg"
+    raster.write_bytes(b"fake")
+    base = dict(
+        project_root=tmp_path,
+        source_raster=raster,
+        map_id="T02_0004",
+        output_parent=tmp_path,
+        conversion_mode="none",
+    )
+
+    line_error = validate_form_state(GuiFormState(**base, target_line_file="线文件"))
+    assert line_error == (
+        "WL 文件名必须以 .WL 结尾；当前值：线文件。"
+        "也可以清空该字段，由程序按 Map ID 自动命名。"
+    )
+
+    text_error = validate_form_state(GuiFormState(**base, target_text_file="文字文件"))
+    assert text_error is not None
+    assert "WT 文件名必须以 .WT 结尾" in text_error
+
+    assert validate_form_state(
+        GuiFormState(
+            **base,
+            target_line_file="t04line.wl",
+            target_text_file="T04TXT.WT",
+            target_area_file="区文件",
+            include_areas=False,
+        )
+    ) is None
+
+    area_error = validate_form_state(
+        GuiFormState(**base, target_area_file="区文件", include_areas=True)
+    )
+    assert area_error is not None
+    assert "WP 文件名必须以 .WP 结尾" in area_error
+
+
 def test_gui_builds_ai_vision_config_from_form_state(tmp_path):
     state = GuiFormState(
         project_root=tmp_path,

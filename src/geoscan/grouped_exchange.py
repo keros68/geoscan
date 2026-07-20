@@ -25,7 +25,10 @@ def target_exchange_kind(target_file: str) -> str:
         return "dxf"
     if suffix == ".WP":
         return "shp"
-    raise ValueError(f"Unsupported target file type: {target_file}")
+    raise ValueError(
+        f"不支持的目标文件类型：{target_file}。"
+        "目标文件名必须以 .WL、.WT 或 .WP 结尾。"
+    )
 
 
 def grouped_exchange_path(output_dir: Path, target_file: str) -> Path:
