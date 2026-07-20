@@ -139,8 +139,17 @@ if (-not $SkipGitRelease) {
             "--notes", $Notes
         )
     } else {
-        & gh release view $Tag *> $null
-        $releaseExists = ($LASTEXITCODE -eq 0)
+        # A missing release is the normal create path, but gh's expected
+        # non-zero probe becomes a terminating NativeCommandError under the
+        # script-wide "Stop" policy on Windows PowerShell 5.1.
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & gh release view $Tag 2>$null | Out-Null
+            $releaseExists = ($LASTEXITCODE -eq 0)
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
         if ($releaseExists) {
             Invoke-External "gh" @(
                 "release", "upload", $Tag,
