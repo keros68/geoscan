@@ -10,14 +10,14 @@ GeoScan 用来处理扫描地质剖面图。输入 TIFF/JPG，程序提取线、
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg)](https://www.python.org/)
 [![tests](https://github.com/keros68/geoscan/actions/workflows/tests.yml/badge.svg)](https://github.com/keros68/geoscan/actions/workflows/tests.yml)
 
-## 适用场景
+## 使用场景
 
 - 扫描图需要先变成可编辑的线和文字候选。
 - 只想要 DXF / QGIS 文件，不想安装或检测 MapGIS。
 - 已经有 MapGIS 6.7，需要继续转成 `.WL` / `.WT`。
 - 一个文件夹里有多张图，要一张一张批量跑。
 
-## 主要功能
+## 功能
 
 - 可选输入调平；默认不动已经处理好的图。
 - 提取线候选和文字候选。OCR 不可用时，会退回到内置区域检测。
@@ -27,7 +27,7 @@ GeoScan 用来处理扫描地质剖面图。输入 TIFF/JPG，程序提取线、
 - 增强底图只方便人工看图，不参与识别。
 - 支持单张、批量、自动更新。
 
-## 不做什么
+## 边界
 
 - 不判断地质含义，不猜边界、标注或地层代码。
 - 不把 AI 建议写成最终成果，不写坐标，不写 `checked=yes`。
